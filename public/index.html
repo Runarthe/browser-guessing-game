@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="theme-color" content="#0f1226" />
+  <title>Closest Wins</title>
+  <link rel="stylesheet" href="styles.css?v=20260727-21" />
+</head>
+<body>
+  <div id="banner" class="banner hidden" role="status"></div>
+  <button id="leave-top-btn" class="leave-top-btn hidden" title="Leave the room">⨉ Leave</button>
+  <button id="sound-btn" class="sound-btn" aria-label="Mute sound" title="Sound on/off">🔊</button>
+
+  <!-- Reusable confirmation dialog -->
+  <div id="modal-overlay" class="modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="modal">
+      <h3 id="modal-title">Are you sure?</h3>
+      <p id="modal-text" class="muted"></p>
+      <div class="modal-actions">
+        <button id="modal-cancel" class="btn btn-secondary">Cancel</button>
+        <button id="modal-confirm" class="btn btn-primary">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <main id="app">
+
+    <!-- ===================== HOME ===================== -->
+    <section class="screen" id="screen-home">
+      <div class="card hero">
+        <h1 class="logo">CLOSEST<span>WINS</span></h1>
+        <p class="tagline">Guess close. Score points.</p>
+
+        <label class="field-label" for="name-input">Your name</label>
+        <input id="name-input" class="text-input" type="text" maxlength="20"
+               placeholder="e.g. Runar" autocomplete="off" />
+
+        <span class="field-label">Your character</span>
+        <div class="creator">
+          <div class="char-preview" id="char-preview">🦊</div>
+          <div class="creator-grids">
+            <div class="emoji-grid" id="emoji-grid"></div>
+            <div class="color-grid" id="color-grid"></div>
+          </div>
+        </div>
+
+        <button id="create-btn" class="btn btn-primary btn-block">Create a room</button>
+        <button id="test-btn" class="btn btn-secondary btn-block">⚡ Quick test with 3 bots</button>
+
+        <div class="divider"><span>or</span></div>
+
+        <label class="field-label" for="code-input">Room code</label>
+        <div class="join-row">
+          <input id="code-input" class="text-input code-input" type="text" maxlength="6"
+                 placeholder="XY4K2A" autocomplete="off" spellcheck="false" />
+          <button id="join-btn" class="btn btn-secondary">Join</button>
+        </div>
+
+        <p class="error-text" id="home-error" role="alert"></p>
+      </div>
+    </section>
+
+    <!-- ===================== LOBBY ===================== -->
+    <section class="screen hidden" id="screen-lobby">
+      <div class="card">
+        <div class="room-header">
+          <div>
+            <span class="muted small">Room</span>
+            <h2 class="room-code" id="lobby-code">------</h2>
+          </div>
+          <button id="copy-btn" class="btn btn-ghost">Copy invite link</button>
+        </div>
+
+        <h3 class="section-title">Players</h3>
+        <ul class="player-list" id="lobby-players"></ul>
+
+        <h3 class="section-title">Game settings</h3>
+        <div id="settings-panel" class="settings">
+          <div class="setting">
+            <span class="setting-label">Arcade</span>
+            <div class="seg" id="set-arcade"></div>
+          </div>
+          <div class="setting hidden" id="set-mode-wrap">
+            <span class="setting-label">Mode</span>
+            <div class="seg" id="set-mode"></div>
+          </div>
+          <p class="mode-desc muted small" id="mode-desc"></p>
+          <div class="setting setting-col hidden" id="set-playlist-wrap">
+            <span class="setting-label">Playlist — tap to add in order</span>
+            <div class="chips" id="set-playlist"></div>
+            <p class="muted small" id="playlist-preview"></p>
+          </div>
+          <div class="setting">
+            <span class="setting-label">Rounds</span>
+            <div class="seg" id="set-rounds"></div>
+          </div>
+          <div class="setting">
+            <span class="setting-label">Time / turn</span>
+            <div class="seg" id="set-seconds"></div>
+          </div>
+          <div class="setting hidden" id="set-target-wrap">
+            <span class="setting-label">First to</span>
+            <div class="seg" id="set-target"></div>
+          </div>
+          <div class="setting setting-col" id="set-categories-wrap">
+            <span class="setting-label">Categories</span>
+            <div class="chips" id="set-categories"></div>
+          </div>
+        </div>
+
+        <p class="muted center" id="lobby-status">Waiting for players…</p>
+
+        <button id="start-btn" class="btn btn-primary btn-block hidden">Start game</button>
+        <p class="muted small center" id="lobby-host-note"></p>
+      </div>
+    </section>
+
+    <!-- ===================== QUESTION (trivia / timeline) ===================== -->
+    <section class="screen hidden" id="screen-question">
+      <div class="card">
+        <div class="round-bar">
+          <span id="round-label">Round 1 of 5</span>
+          <span class="timer" id="timer">30s</span>
+        </div>
+
+        <p class="category-chip" id="question-category">Geography</p>
+        <h2 class="question-text" id="question-text">Loading…</h2>
+
+        <div id="timeline-viz" class="timeline-viz hidden"></div>
+
+        <div id="guess-area">
+          <label class="field-label" for="guess-input">Your guess</label>
+          <div class="guess-row">
+            <input id="guess-input" class="text-input guess-input" type="number"
+                   inputmode="decimal" autocomplete="off" placeholder="0" />
+            <span class="unit" id="guess-unit"></span>
+          </div>
+          <div id="guess-slider-wrap" class="guess-slider-wrap">
+            <input id="guess-slider" class="guess-slider" type="range" min="0" max="10000" step="1" value="0"
+                   aria-label="Choose your answer" />
+            <div class="guess-slider-labels"><span>0</span><strong id="guess-slider-value">0</strong><span id="guess-slider-max">1,000</span></div>
+          </div>
+          <button id="submit-btn" class="btn btn-primary btn-block">Submit guess</button>
+        </div>
+
+        <div id="submitted-area" class="hidden">
+          <div class="submitted-badge">
+            Guess submitted: <strong id="submitted-value"></strong>
+          </div>
+          <p class="muted center">Waiting for the other players…</p>
+        </div>
+
+        <p class="muted small center" id="progress-label" aria-live="polite">0 of 0 players have answered</p>
+        <p class="error-text" id="question-error" role="alert"></p>
+      </div>
+    </section>
+
+    <!-- ===================== TURN (curling / bomb) ===================== -->
+    <section class="screen hidden" id="screen-turn">
+      <div class="card">
+        <div class="round-bar">
+          <span id="turn-round-label">Round 1 of 5</span>
+          <span class="timer" id="turn-timer">15s</span>
+        </div>
+
+        <!-- Curling -->
+        <div id="curling-area" class="hidden">
+          <p class="category-chip" id="turn-category"></p>
+          <h2 class="question-text" id="turn-question">…</h2>
+          <ul class="shot-list" id="shot-list"></ul>
+          <div id="curling-order" class="turn-order"></div>
+          <div id="curling-input" class="hidden">
+            <label class="field-label" for="turn-guess">Your shot</label>
+            <div class="guess-row">
+              <input id="turn-guess" class="text-input guess-input" type="number"
+                     inputmode="decimal" autocomplete="off" placeholder="0" />
+              <span class="unit" id="turn-unit"></span>
+            </div>
+            <button id="turn-submit" class="btn btn-primary btn-block">Take your shot</button>
+          </div>
+          <p class="muted center" id="curling-wait"></p>
+        </div>
+
+        <!-- Balloon (formerly bomb) -->
+        <div id="bomb-area" class="hidden">
+          <div class="balloon-stage">
+            <canvas id="balloon-canvas" width="420" height="300"></canvas>
+          </div>
+          <p class="bomb-count muted center">Pumps so far: <strong id="bomb-total">0</strong></p>
+          <div id="bomb-order" class="turn-order"></div>
+          <div id="bomb-input" class="hidden">
+            <p class="center muted small">Pump 1–3 times… but don't make it pop!</p>
+            <div class="press-row">
+              <button class="btn btn-secondary press-btn" data-times="1">Pump ×1</button>
+              <button class="btn btn-secondary press-btn" data-times="2">Pump ×2</button>
+              <button class="btn btn-secondary press-btn" data-times="3">Pump ×3</button>
+            </div>
+          </div>
+          <p class="muted center" id="bomb-wait"></p>
+        </div>
+
+        <!-- Timeline (Hitster) -->
+        <div id="timeline-area" class="hidden">
+          <p class="category-chip" id="tl-target-chip"></p>
+          <div class="tl-card" id="tl-card">
+            <span class="tl-card-label" id="tl-card-label">…</span>
+            <span class="muted small">Where does this go?</span>
+          </div>
+          <p class="muted small center" id="tl-wait"></p>
+          <div id="tl-myrow" class="tl-myrow"></div>
+          <div id="tl-vote-controls" class="hidden">
+            <button id="tl-lock-btn" class="btn btn-primary btn-block" disabled>🔒 Lock in vote</button>
+            <p class="muted small center" id="tl-vote-status"></p>
+          </div>
+          <h3 class="section-title" id="tl-others-title">Everyone's timelines</h3>
+          <div id="tl-others"></div>
+          <div class="tl-toast hidden" id="tl-toast"></div>
+        </div>
+
+        <p class="error-text" id="turn-error" role="alert"></p>
+      </div>
+    </section>
+
+    <!-- ===================== MAP (place it) ===================== -->
+    <section class="screen hidden" id="screen-map">
+      <div class="card">
+        <div class="round-bar">
+          <span id="map-round-label">Round 1 of 5</span>
+          <span class="timer" id="map-timer">30s</span>
+        </div>
+        <h2 class="question-text map-prompt" id="map-prompt">…</h2>
+        <div class="map-wrap">
+          <svg id="map-svg" viewBox="0 0 1000 500" preserveAspectRatio="xMidYMid meet">
+            <rect class="map-ocean" x="0" y="0" width="1000" height="500"></rect>
+            <path id="map-land" class="map-land" d=""></path>
+            <g id="map-pins"></g>
+          </svg>
+          <div class="map-controls" aria-label="Map zoom controls">
+            <button id="map-zoom-in" class="map-control" aria-label="Zoom in">＋</button>
+            <button id="map-zoom-out" class="map-control" aria-label="Zoom out">−</button>
+            <button id="map-reset" class="map-control map-reset" aria-label="Reset map">Reset</button>
+          </div>
+        </div>
+        <p class="muted small center" id="map-hint">Tap the map to drop your pin.</p>
+        <button id="map-submit" class="btn btn-primary btn-block" disabled>Submit location</button>
+        <p class="muted small center" id="map-progress" aria-live="polite"></p>
+        <p class="error-text" id="map-error" role="alert"></p>
+      </div>
+    </section>
+
+    <!-- ===================== PLATFORMER ===================== -->
+    <section class="screen hidden" id="screen-platformer">
+      <div class="card platformer-card">
+        <div class="round-bar">
+          <span id="platformer-round">Round 1 of 5</span>
+          <span class="timer" id="platformer-timer">30s</span>
+        </div>
+        <h2 class="question-text" id="platformer-title">Build the course</h2>
+        <p class="muted small center" id="platformer-hint"></p>
+        <div id="platformer-map-vote" class="platformer-map-vote hidden"></div>
+        <div class="platformer-wrap">
+          <canvas id="platformer-canvas" width="800" height="480" aria-label="Platformer course"></canvas>
+        </div>
+        <div class="platformer-tools" id="platformer-tools"></div>
+        <button id="platformer-lock" class="btn btn-primary btn-block">Lock in tile</button>
+        <div class="platformer-controls hidden" id="platformer-controls">
+          <button class="btn btn-secondary" data-move="left" aria-label="Move left">◀</button>
+          <button class="btn btn-primary" data-move="jump" aria-label="Jump">Jump</button>
+          <button class="btn btn-secondary" data-move="right" aria-label="Move right">▶</button>
+        </div>
+        <p class="muted small center" id="platformer-status" aria-live="polite"></p>
+      </div>
+    </section>
+
+    <!-- ===================== RESULTS ===================== -->
+    <section class="screen hidden" id="screen-drawing">
+      <div class="card game-card">
+        <div class="round-bar">
+          <span id="drawing-round">Round 1</span>
+          <span class="timer" id="drawing-timer">30s</span>
+        </div>
+        <h2 class="question-text" id="drawing-title">Draw!</h2>
+        <p class="muted small center" id="drawing-clue"></p>
+        <canvas id="drawing-canvas" class="drawing-canvas" width="720" height="500"></canvas>
+        <div id="drawing-tools" class="drawing-tools hidden">
+          <input id="drawing-color" type="color" value="#111111" aria-label="Brush color">
+          <input id="drawing-width" type="range" min="2" max="24" value="6" aria-label="Brush width">
+          <button id="drawing-clear" class="btn btn-secondary">Clear</button>
+        </div>
+        <form id="drawing-guess-form" class="drawing-guess">
+          <input id="drawing-guess" class="text-input" maxlength="40" autocomplete="off" placeholder="Type your guess…">
+          <button class="btn btn-primary">Guess</button>
+        </form>
+        <div id="drawing-feed" class="drawing-feed"></div>
+        <p id="drawing-status" class="muted small center"></p>
+      </div>
+    </section>
+
+    <section class="screen hidden" id="screen-pushy">
+      <div class="card game-card">
+        <div class="round-bar">
+          <span id="pushy-round">Round 1</span>
+          <span class="timer" id="pushy-timer">22s</span>
+        </div>
+        <h2 class="question-text" id="pushy-title">Stay on the ice!</h2>
+        <p class="muted small center">Dodge the penguin crowds. Don’t get pushed into the water.</p>
+        <canvas id="pushy-canvas" class="pushy-canvas" width="720" height="440"></canvas>
+        <div class="platformer-controls" id="pushy-controls">
+          <button class="btn btn-secondary" data-pushy="left">◀</button>
+          <button class="btn btn-secondary" data-pushy="up">▲</button>
+          <button class="btn btn-secondary" data-pushy="down">▼</button>
+          <button class="btn btn-secondary" data-pushy="right">▶</button>
+        </div>
+        <p id="pushy-status" class="muted small center"></p>
+      </div>
+    </section>
+
+    <section class="screen hidden" id="screen-redlight">
+      <div class="card game-card">
+        <div class="round-bar">
+          <span id="redlight-round">Round 1</span>
+          <span class="timer" id="redlight-timer">30s</span>
+        </div>
+        <div id="redlight-signal" class="redlight-signal green">
+          <span class="signal-lamp"></span>
+          <h2 id="redlight-title">GREEN LIGHT</h2>
+        </div>
+        <p class="muted small center" id="redlight-hint">Hold MOVE during green. Release before the real red light!</p>
+        <div id="redlight-track" class="redlight-track"></div>
+        <button id="redlight-move" class="btn btn-primary btn-block redlight-move">HOLD TO MOVE</button>
+        <div id="redlight-controls" class="redlight-controller hidden">
+          <button id="redlight-toggle" class="btn btn-danger">Switch to red</button>
+          <button id="redlight-feint" class="btn btn-secondary">Fake red 👀</button>
+        </div>
+        <div id="redlight-battery-wrap" class="battery-wrap hidden">
+          <div class="battery-label"><span>Light battery</span><strong id="redlight-battery-label">100%</strong></div>
+          <div class="battery-track"><div id="redlight-battery" class="battery-fill"></div></div>
+          <p class="muted small center">Red drains it. Green recharges it. Feints cost 12%.</p>
+        </div>
+        <p id="redlight-status" class="muted small center"></p>
+      </div>
+    </section>
+
+    <section class="screen hidden" id="screen-hidebomb">
+      <div class="card game-card">
+        <div class="round-bar">
+          <span id="hidebomb-round">Round 1</span>
+          <span class="timer" id="hidebomb-timer">8s</span>
+        </div>
+        <h2 class="question-text" id="hidebomb-title">Pick a hiding place</h2>
+        <p class="muted small center" id="hidebomb-hint"></p>
+        <div id="hidebomb-blindfold" class="hidebomb-blindfold hidden">
+          <div class="blindfold-mask">● ━━━ ●</div>
+          <h3>YOU’RE BLINDFOLDED</h3>
+          <p>The team is choosing their cannons.<br>Listen closely… but no peeking!</p>
+        </div>
+        <div id="hidebomb-board" class="hidebomb-board"></div>
+        <div id="hidebomb-players" class="hidebomb-players"></div>
+        <p id="hidebomb-status" class="muted small center"></p>
+      </div>
+    </section>
+
+    <section class="screen hidden" id="screen-arena">
+      <div class="card game-card">
+        <div class="round-bar">
+          <span id="arena-round">Round 1</span>
+          <span class="timer" id="arena-timer">26s</span>
+        </div>
+        <div id="arena-sign" class="arena-sign">GET READY!</div>
+        <h2 class="question-text" id="arena-title">Survive!</h2>
+        <p class="muted small center" id="arena-hint"></p>
+        <canvas id="arena-canvas" class="arena-canvas" width="720" height="440"></canvas>
+        <div class="platformer-controls" id="arena-controls">
+          <button class="btn btn-secondary" data-arena="left">◀</button>
+          <button class="btn btn-secondary" data-arena="up">▲</button>
+          <button class="btn btn-secondary" data-arena="down">▼</button>
+          <button class="btn btn-secondary" data-arena="right">▶</button>
+          <button class="btn btn-primary arena-jump" id="arena-jump">JUMP</button>
+        </div>
+        <p id="arena-status" class="muted small center"></p>
+      </div>
+    </section>
+
+    <section class="screen hidden" id="screen-doors">
+      <div class="card game-card">
+        <div class="round-bar">
+          <span id="doors-round">Round 1 · Door 1 of 3</span>
+          <span class="timer" id="doors-timer">8s</span>
+        </div>
+        <h2 class="question-text" id="doors-title">Choose a door!</h2>
+        <p class="muted small center" id="doors-hint">Some are safe. Others hurt—or eliminate—you.</p>
+        <canvas id="doors-canvas" class="arena-canvas doors-canvas" width="720" height="440"></canvas>
+        <div class="platformer-controls" id="doors-controls">
+          <button class="btn btn-secondary" data-door="left">◀</button>
+          <button class="btn btn-secondary" data-door="up">▲</button>
+          <button class="btn btn-secondary" data-door="down">▼</button>
+          <button class="btn btn-secondary" data-door="right">▶</button>
+        </div>
+        <div id="doors-players" class="doors-players"></div>
+        <p id="doors-status" class="muted small center"></p>
+      </div>
+    </section>
+
+    <!-- ===================== RESULTS ===================== -->
+    <section class="screen hidden" id="screen-results">
+      <div class="card">
+        <div id="results-head">
+          <p class="muted center small" id="results-caption">Correct answer</p>
+          <h2 class="answer-big" id="correct-answer">—</h2>
+        </div>
+
+        <div id="results-timeline" class="timeline-viz hidden"></div>
+
+        <div class="map-wrap hidden" id="results-map-wrap">
+          <svg id="results-map-svg" viewBox="0 0 1000 500" preserveAspectRatio="xMidYMid meet">
+            <rect class="map-ocean" x="0" y="0" width="1000" height="500"></rect>
+            <path class="map-land" id="results-map-land" d=""></path>
+            <g id="results-map-pins"></g>
+          </svg>
+          <div class="map-controls" aria-label="Results map zoom controls">
+            <button id="results-map-zoom-in" class="map-control" aria-label="Zoom in">＋</button>
+            <button id="results-map-zoom-out" class="map-control" aria-label="Zoom out">−</button>
+            <button id="results-map-reset" class="map-control map-reset" aria-label="Reset map">Reset</button>
+          </div>
+        </div>
+
+        <ul class="result-list" id="result-list"></ul>
+
+        <button id="next-btn" class="btn btn-primary btn-block hidden">Next round</button>
+        <p class="muted small center" id="results-host-note"></p>
+      </div>
+    </section>
+
+    <!-- ===================== INTERMISSION (arcade) ===================== -->
+    <section class="screen hidden" id="screen-intermission">
+      <div class="card center-card">
+        <p class="final-kicker" id="inter-kicker">GAME COMPLETE</p>
+        <h2 class="announce" id="inter-next">Up next…</h2>
+        <p class="muted small" id="inter-progress"></p>
+        <ul class="result-list" id="inter-standings"></ul>
+        <button id="inter-next-btn" class="btn btn-primary btn-block hidden">Start next game</button>
+        <p class="muted small center" id="inter-host-note"></p>
+      </div>
+    </section>
+
+    <!-- ===================== FINAL ===================== -->
+    <section class="screen hidden" id="screen-final">
+      <div class="card center-card">
+        <div class="confetti" id="confetti" aria-hidden="true"></div>
+        <p class="final-kicker" id="final-kicker">FINAL RESULTS</p>
+        <h2 class="announce" id="final-announce">…</h2>
+
+        <div class="podium" id="podium" aria-hidden="true"></div>
+
+        <p class="muted small" id="winner-score"></p>
+
+        <ul class="result-list" id="final-list"></ul>
+
+        <div class="final-actions">
+          <button id="playagain-btn" class="btn btn-primary hidden">Play again</button>
+          <button id="leave-btn" class="btn btn-secondary">Leave room</button>
+        </div>
+        <p class="muted small center" id="final-host-note"></p>
+      </div>
+    </section>
+
+  </main>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="world.js?v=20260726-13"></script>
+  <script src="characters.js?v=20260725-15"></script>
+  <script src="arena25d.js?v=20260725-15"></script>
+  <script src="vanishMaps.js?v=20260727-45"></script>
+  <script src="app.js?v=20260730-58"></script>
+</body>
+</html>

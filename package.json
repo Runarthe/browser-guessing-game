@@ -1,0 +1,19 @@
+{
+  "name": "closest-wins",
+  "version": "1.0.0",
+  "description": "Closest Wins — a browser-based multiplayer number-guessing party game.",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

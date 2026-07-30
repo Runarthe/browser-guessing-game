@@ -1,0 +1,751 @@
+"use strict";
+
+const test = require("node:test");
+const assert = require("node:assert/strict");
+
+const { RoomManager, GAME_STATES } = require("../src/roomManager");
+const { GameManager } = require("../src/gameManager");
+
+/** Build a manager that captures emitted events and uses no-op timers. */
+function harness(minPlayers = 2) {
+  const events = [];
+  const rm = new RoomManager();
+  const gm = new GameManager(rm, {
+    emitRoom: (code, event, payload) => events.push({ event, payload }),
+    minPlayersToStart: minPlayers,
+    setTimer: () => 0,
+    clearTimer: () => {}
+  });
+  const last = (ev) => [...events].reverse().find((e) => e.event === ev);
+  return { events, rm, gm, last };
+}
+
+function enterPlatformerBuild(gm, room) {
+  assert.equal(gm.startGame(room, "s1").ok, true);
+  assert.equal(room.platformer.phase, "mapvote");
+  gm.platformerMapVote(room, "s1", "skybridge");
+  gm.platformerMapVote(room, "s2", "skybridge");
+  assert.equal(room.platformer.phase, "maproulette");
+  gm.beginPlatformerBuild(room);
+  for (const type of gm.platformerHand()) room.platformer.pool[type] = 3;
+}
+
+test("no-repeat: a replay in the same room avoids used questions", () => {
+  const { rm, gm } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  room.settings.rounds = 5;
+
+  gm.startGame(room, "s1");
+  const firstIds = room.questions.map((q) => q.id);
+  gm.restartGame(room, "s1");
+  gm.startGame(room, "s1");
+  const secondIds = room.questions.map((q) => q.id);
+
+  const overlap = secondIds.filter((id) => firstIds.includes(id));
+  assert.equal(overlap.length, 0, "replay repeated a question");
+});
+
+test("curling: turn order puts the current leader first", () => {
+  const { rm, gm } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  rm.joinRoom("s3", room.code, "Erik");
+  // Anna leads, Erik second, Runar last.
+  room.players["s1"].score = 10;
+  room.players["s2"].score = 300;
+  room.players["s3"].score = 120;
+  assert.deepEqual(gm.buildTurnOrder(room), ["s2", "s3", "s1"]);
+});
+
+test("curling: only the active player may shoot; results rank by closeness", () => {
+  const { rm, gm, last } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  rm.joinRoom("s3", room.code, "Erik");
+  room.settings.mode = "curling";
+  room.settings.rounds = 1;
+
+  gm.startGame(room, "s1");
+  assert.equal(room.state, GAME_STATES.QUESTION);
+  const ans = room.currentQuestion.answer;
+
+  const firstShooter = room.turnOrder[0];
+  const other = room.turnOrder[1];
+  // A non-active player cannot shoot.
+  assert.equal(gm.submitGuess(room, other, ans).ok, false);
+  // The active player shoots, then the turn advances.
+  assert.equal(gm.submitGuess(room, firstShooter, ans + 1000).ok, true);
+  assert.equal(room.turnOrder[room.turnIndex], other);
+
+  // Everyone shoots; the closest wins.
+  gm.submitGuess(room, room.turnOrder[room.turnIndex], ans + 3); // very close
+  gm.submitGuess(room, room.turnOrder[room.turnIndex], ans - 900);
+
+  assert.equal(room.state, GAME_STATES.RESULTS);
+  const res = last("round:results").payload;
+  assert.equal(res.ranking[0].pointsAwarded, 100);
+  assert.ok(res.ranking[0].distance <= res.ranking[1].distance);
+});
+
+test("bomb: whoever crosses the hidden threshold pops and scores zero", () => {
+  const { rm, gm, last } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  room.settings.mode = "bomb";
+  room.settings.rounds = 1;
+
+  gm.startGame(room, "s1");
+  assert.equal(room.state, GAME_STATES.QUESTION);
+  const threshold = room.bomb.threshold;
+  assert.ok(threshold >= 1);
+
+  // Press until it pops. Each press is by whoever is active.
+  let guard = 0;
+  while (room.state === GAME_STATES.QUESTION && guard++ < 100) {
+    const activeId = room.turnOrder[room.turnIndex % room.turnOrder.length];
+    gm.bombPress(room, activeId, 1);
+  }
+  assert.equal(room.state, GAME_STATES.RESULTS);
+  const res = last("round:results").payload;
+  assert.equal(res.mode, "bomb");
+  const popper = res.ranking.find((r) => r.playerId === res.popperId);
+  assert.equal(popper.pointsAwarded, 0);
+  assert.ok(res.ranking.some((r) => r.survived && r.pointsAwarded > 0));
+});
+
+test("platformer: players build one tile, race, and score finishers", () => {
+  const { rm, gm, last } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  room.settings.mode = "platformer";
+  room.settings.rounds = 1;
+
+  enterPlatformerBuild(gm, room);
+  assert.equal(room.platformer.phase, "build");
+  assert.equal(gm.platformerPlace(room, "s1", { col: 6, row: 8, type: "solid" }).ok, true);
+  assert.equal(gm.platformerPlace(room, "s2", { col: 7, row: 8, type: "bouncy" }).ok, true);
+  gm.platformerLock(room, "s1", true);
+  gm.platformerLock(room, "s2", true);
+
+  assert.equal(room.platformer.phase, "race");
+  assert.equal(room.platformer.level.tiles["6,8"], "solid");
+  assert.equal(room.platformer.level.tiles["7,8"], "bouncy");
+  gm.platformerOutcome(room, "s1", "goal", 4200);
+  gm.platformerOutcome(room, "s2", "dead", 5000);
+
+  assert.equal(room.state, GAME_STATES.RESULTS);
+  const result = last("round:results").payload;
+  assert.equal(result.mode, "platformer");
+  assert.equal(result.soloBonus, true);
+  assert.equal(result.ranking[0].playerId, "s1");
+  assert.equal(result.ranking[0].pointsAwarded, 3);
+});
+
+test("platformer: a rejected move preserves the player's previous placement", () => {
+  const { rm, gm } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  room.settings.mode = "platformer";
+  enterPlatformerBuild(gm, room);
+
+  gm.platformerPlace(room, "s1", { col: 6, row: 8, type: "spike" });
+  const rejected = gm.platformerPlace(room, "s1", { col: 0, row: 10, type: "solid" });
+  assert.equal(rejected.ok, false);
+  assert.deepEqual(room.platformer.placements.s1, { col: 6, row: 8, type: "spike", locked: false });
+});
+
+test("platformer: live racer positions are shared and bounded", () => {
+  const { rm, gm, last } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  room.settings.mode = "platformer";
+  enterPlatformerBuild(gm, room);
+  gm.platformerLock(room, "s1", true);
+  gm.platformerLock(room, "s2", true);
+
+  assert.equal(gm.platformerPosition(room, "s1", { x: 120, y: 286, vx: 80, vy: 0 }).ok, true);
+  const update = last("platformer:positions").payload.players.find((p) => p.playerId === "s1");
+  assert.deepEqual({ x: update.x, y: update.y, vx: update.vx, vy: update.vy },
+    { x: 120, y: 286, vx: 80, vy: 0 });
+  assert.equal(gm.platformerPosition(room, "s1", { x: Infinity, y: 0, vx: 0, vy: 0 }).ok, false);
+});
+
+test("platformer: shared pool reserves picks and broadcasts live builder cursors", () => {
+  const { rm, gm, last } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  room.settings.mode = "platformer";
+  enterPlatformerBuild(gm, room);
+  room.platformer.pool.saw = 1;
+
+  assert.equal(room.platformer.level.cols, 24);
+  assert.equal(room.platformer.level.rows, 14);
+  assert.equal(gm.platformerSelect(room, "s1", "saw").ok, true);
+  assert.equal(gm.platformerSelect(room, "s2", "saw").ok, false);
+  assert.equal(gm.platformerSelect(room, "s1", "solid").ok, true);
+  assert.equal(gm.platformerSelect(room, "s2", "saw").ok, true);
+  assert.equal(gm.platformerHover(room, "s2", { col: 12, row: 7 }).ok, true);
+
+  const builders = last("platformer:builders").payload;
+  assert.equal(builders.pool.saw, 0);
+  assert.deepEqual(builders.builders.find((p) => p.playerId === "s2").cursor, { col: 12, row: 7 });
+});
+
+test("platformer: each round gets a scarce randomized pool including new block types", () => {
+  const { rm, gm } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  const pool = gm.platformerPool(room);
+  assert.equal(Object.values(pool).reduce((sum, n) => sum + n, 0), 5);
+  assert.ok(pool.solid >= 1);
+  assert.ok("conveyor" in pool);
+  assert.ok("bombtrap" in pool);
+});
+
+test("platformer: demolition bombs remove player tiles but not protected map terrain", () => {
+  const { rm, gm } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  room.settings.mode = "platformer";
+  enterPlatformerBuild(gm, room);
+  gm.platformerPlace(room, "s1", { col: 6, row: 8, type: "solid" });
+  gm.platformerPlace(room, "s2", { col: 7, row: 8, type: "spike" });
+  gm.platformerLock(room, "s1", true);
+  gm.platformerLock(room, "s2", true);
+  gm.platformerOutcome(room, "s1", "dead", 1000);
+  gm.platformerOutcome(room, "s2", "dead", 1100);
+  gm.nextRound(room, "s1");
+
+  for (const type of gm.platformerHand()) room.platformer.pool[type] = 0;
+  room.platformer.pool.bombtrap = 2;
+  assert.equal(gm.platformerSelect(room, "s1", "bombtrap").ok, true);
+  assert.equal(gm.platformerPlace(room, "s1", { col: 6, row: 8, type: "bombtrap" }).ok, true);
+  assert.equal(room.platformer.level.tiles["6,8"], undefined);
+  assert.equal(room.platformer.placements.s1.type, "demolition");
+
+  assert.equal(gm.platformerSelect(room, "s2", "bombtrap").ok, true);
+  const protectedResult = gm.platformerPlace(room, "s2", { col: 0, row: 11, type: "bombtrap" });
+  assert.equal(protectedResult.ok, false);
+  assert.match(protectedResult.error, /protected/);
+});
+
+test("platformer: map templates have distinct routes, terrain, and themes", () => {
+  const { gm } = harness();
+  const maps = gm.platformerMaps();
+  assert.equal(maps.length, 3);
+  assert.equal(new Set(maps.map((m) => m.level.theme.id)).size, 3);
+  assert.equal(new Set(maps.map((m) => JSON.stringify(m.level.tiles))).size, 3);
+  assert.ok(Object.values(maps.find((m) => m.id === "canyon").level.tiles).includes("crumble"));
+  assert.ok(Object.values(maps.find((m) => m.id === "zigzag").level.tiles).includes("ice"));
+});
+
+test("drawing: only the artist draws and correct guesses score both players", () => {
+  const { rm, gm, last } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  room.settings.mode = "drawing";
+  room.settings.rounds = 1;
+  gm.startGame(room, "s1");
+
+  const drawer = room.drawing.drawerId;
+  const guesser = drawer === "s1" ? "s2" : "s1";
+  assert.equal(gm.drawingStroke(room, guesser, { x0: 0, y0: 0, x1: 1, y1: 1 }).ok, false);
+  assert.equal(gm.drawingStroke(room, drawer, {
+    x0: .1, y0: .1, x1: .2, y1: .2, color: "#123456", width: 5
+  }).ok, true);
+  assert.equal(gm.drawingGuess(room, guesser, room.drawing.word.toUpperCase()).correct, true);
+
+  assert.equal(room.state, GAME_STATES.RESULTS);
+  assert.equal(room.players[guesser].score, 100);
+  assert.equal(room.players[drawer].score, 50);
+  assert.equal(last("round:results").payload.word.length > 0, true);
+});
+
+test("pushy: survivors score highest and eliminated players earn survival points", () => {
+  const { rm, gm, last } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  room.settings.mode = "pushy";
+  room.settings.rounds = 1;
+  gm.startGame(room, "s1");
+
+  const move = gm.pushyPosition(room, "s1", { x: 400, y: 210, vx: 80, vy: -15 });
+  assert.equal(move.ok, true);
+  assert.equal(room.pushy.positions.s1.x, 400);
+  assert.equal(last("pushy:positions").payload.players.length, 2);
+
+  gm.pushyOutcome(room, "s1", "dead", 11000);
+  gm.pushyOutcome(room, "s2", "survived", 22000);
+  assert.equal(room.state, GAME_STATES.RESULTS);
+  const result = last("round:results").payload;
+  assert.equal(result.mode, "pushy");
+  assert.equal(result.ranking[0].playerId, "s2");
+  assert.equal(result.ranking[0].pointsAwarded, 100);
+  assert.equal(result.ranking[1].pointsAwarded, 25);
+});
+
+test("color twister: server validates positions and scores the last survivor", () => {
+  const { rm, gm, last } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  room.settings.mode = "colorfloor";
+  room.settings.rounds = 1;
+  assert.equal(gm.startGame(room, "s1").ok, true);
+  assert.equal(last("arena:start").payload.mode, "colorfloor");
+  assert.equal(gm.arenaPosition(room, "s1", { x: 125, y: 125 }).ok, true);
+  assert.equal(gm.arenaJump(room, "s1").ok, true);
+  assert.ok(room.arena.positions.s1.jumpUntil > Date.now());
+  assert.ok(gm.colorFloorTiming(0).duration > gm.colorFloorTiming(18000).duration);
+  assert.equal(gm.colorFloorTiming(0).duration, 6800, "the opening call should be generous");
+  assert.ok(gm.colorFloorTiming(30000).duration <= 3550, "late calls should become frantic");
+  const shuffled = gm.colorFloorLayout();
+  assert.deepEqual([0,1,2,3].map((color) => shuffled.filter((v) => v === color).length), [6,6,6,6]);
+  Object.assign(room.arena.positions.s1, { x: 200, y: 200, vx: 180, vy: 0, jumpUntil: 0, updatedAt: Date.now()-100 });
+  Object.assign(room.arena.positions.s2, { x: 230, y: 200, vx: 10, vy: 0, updatedAt: Date.now()-100 });
+  gm.arenaPosition(room, "s1", { x: 208, y: 200 });
+  assert.ok(last("arena:bump"), "touching players should emit a bump reaction");
+  assert.ok(room.arena.positions.s2.x > 230, "the contacted player should be pushed away");
+  room.arena.tileLayout = Array(24).fill(1);
+  room.arena.safeColor = 0;
+  room.arena.colorDangerAt = Date.now() - 1000;
+  room.arena.positions.s2.updatedAt = 0;
+  gm.arenaPosition(room, "s2", { x: 240, y: 220 });
+  assert.equal(room.arena.eliminated.s2.reason, "lava", "crossing an unsafe tile stays continuously lethal");
+  gm.finishArenaRound(room);
+  assert.equal(last("round:results").payload.ranking[0].playerId, "s1");
+  assert.equal(room.players.s1.score, 100);
+});
+
+test("vanishing grid: stepped tiles crack and expired tiles eliminate", () => {
+  const { rm, gm, last } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  room.settings.mode = "vanish";
+  gm.startGame(room, "s1");
+  // Force a full-grid map + spawns on exact tile centres so each player's
+  // footprint sits on a single tile (footprint straddling activates several).
+  room.arena.vmask = "full";
+  room.arena.positions.s1 = { x: 240, y: 201.33, vx: 0, vy: 0, updatedAt: 0, jumpUntil: 0, layer: 0 };
+  room.arena.positions.s2 = { x: 480, y: 238.67, vx: 0, vy: 0, updatedAt: 0, jumpUntil: 0, layer: 0 };
+  gm.tickArena(room);
+  assert.equal(Object.keys(room.arena.tiles).length, 2);
+  assert.ok(last("vanish:tile"));
+  const own = room.arena.positions.s1;
+  const { tileCellAt } = require("../src/gameManager");
+  const cell = tileCellAt(own.x, own.y);
+  const key = `0:${cell.col}:${cell.row}`;
+  room.arena.tiles[key].disappearsAt = Date.now() - 1;
+  gm.tickArena(room);
+  assert.equal(room.arena.positions.s1.layer, 1, "the first fall should land on a lower floor");
+  room.arena.positions.s1.jumpUntil = 0;
+  const lowerKey = `1:${cell.col}:${cell.row}`;
+  room.arena.tiles[lowerKey] = { disappearsAt: Date.now() - 1 };
+  gm.tickArena(room);
+  assert.equal(room.arena.positions.s1.layer, 2);
+});
+
+test("vanishing grid: a genuine step across a seam activates both touched tiles", () => {
+  const { rm, gm } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  room.settings.mode = "vanish";
+  gm.startGame(room, "s1");
+  room.arena.vmask = "full";
+  // On the vertical seam between cols 5 and 6 (x=72+6*48=360), row 3 centre.
+  room.arena.positions.s1 = { x: 360, y: 201, vx: 0, vy: 0, updatedAt: 0, jumpUntil: 0, layer: 0 };
+  room.arena.positions.s2 = { x: 480, y: 238.67, vx: 0, vy: 0, updatedAt: 0, jumpUntil: 0, layer: 0 };
+  gm.tickArena(room);
+  assert.ok(room.arena.tiles["0:5:3"], "left tile under the seam cracks");
+  assert.ok(room.arena.tiles["0:6:3"], "right tile under the seam cracks");
+});
+
+test("vanishing grid: movement never resets decay and the circular footprint skips diagonal tiles", () => {
+  const { rm, gm } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  room.settings.mode = "vanish";
+  gm.startGame(room, "s1");
+  room.arena.vmask = "full";
+  room.arena.positions.s1 = { x: 362, y: 222, vx: 0, vy: 0, updatedAt: 0, jumpUntil: 0, layer: 0 };
+  room.arena.positions.s2.jumpUntil = Date.now() + 10000;
+  gm.tickArena(room);
+  const first = room.arena.tiles["0:6:4"];
+  assert.ok(first);
+  const originalExpiry = first.disappearsAt;
+  gm.tickArena(room);
+  assert.equal(first.disappearsAt, originalExpiry, "revisiting a tile must not restart its countdown");
+  assert.equal(room.arena.tiles["0:5:3"], undefined, "a diagonally adjacent tile is not under the circular foot contact");
+});
+
+test("bomb pass: touching passes the hidden-fuse bomb without exposing its deadline", () => {
+  const { rm, gm, last } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  room.settings.mode = "bombpass";
+  gm.startGame(room, "s1");
+  room.arena.holderId = "s1";
+  room.arena.passLockedUntil = 0;
+  room.arena.positions.s2 = { x: 220, y: 220, updatedAt: 0 };
+  gm.arenaPosition(room, "s1", { x: 220, y: 220 });
+  assert.equal(room.arena.holderId, "s2");
+  assert.equal("explodeAt" in last("arena:start").payload, false);
+  assert.equal(last("bombpass:holder").payload.holderId, "s2");
+});
+
+test("playing with fire: bombs destroy crates and eliminate players in the blast", () => {
+  const { rm, gm, last } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  room.settings.mode = "fire";
+  gm.startGame(room, "s1");
+  assert.equal(last("arena:start").payload.mode, "fire");
+  const owner = room.arena.positions.s1;
+  const cell = gm.fireCell(owner.x, owner.y);
+  room.arena.crates = [`${cell.col + 1}:${cell.row}`];
+  assert.equal(gm.arenaAction(room, "s1").ok, true);
+  const bomb = room.arena.bombs[0];
+  room.arena.positions.s1.x += 120;
+  room.arena.positions.s2 = { x: 35 + cell.col*50 + 25, y: 20 + cell.row*45 + 22, updatedAt: 0 };
+  gm.explodeFireBomb(room, bomb, Date.now());
+  assert.equal(room.arena.eliminated.s2.reason, "blast");
+  assert.equal(room.arena.crates.length, 0);
+  assert.ok(last("arena:fire"));
+});
+
+test("playing with fire: body collision prevents diagonal clipping and powerups upgrade bombs", () => {
+  const { rm, gm, last } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  room.settings.mode = "fire";
+  gm.startGame(room, "s1");
+  room.arena.crates=[];
+  const pos=room.arena.positions.s1;
+  Object.assign(pos,{x:120,y:125,updatedAt:0});
+  gm.arenaPosition(room,"s1",{x:148,y:145});
+  assert.equal(pos.x,120,"the full character body must not enter the solid block at cell 2:2");
+  assert.ok(pos.y>125,"axis resolution should still allow sliding alongside the block");
+
+  const cell=gm.fireCell(pos.x,pos.y),key=`${cell.col}:${cell.row}`;
+  room.arena.powerups=[{key,type:"range"}];pos.updatedAt=0;
+  gm.arenaPosition(room,"s1",{x:pos.x,y:pos.y});
+  assert.equal(room.arena.upgrades.s1.range,3);
+  assert.equal(last("arena:powerup").payload.type,"range");
+  gm.arenaAction(room,"s1");
+  assert.equal(room.arena.bombs[0].range,3);
+});
+
+test("pocket racers: sequential checkpoints complete three laps", () => {
+  const { rm, gm, last } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  room.settings.mode = "racing";
+  gm.startGame(room, "s1");
+  assert.equal(last("arena:start").payload.mode, "racing");
+  assert.ok(Math.hypot(
+    room.arena.positions.s1.x-room.arena.positions.s2.x,
+    room.arena.positions.s1.y-room.arena.positions.s2.y
+  )>=50,"front-row cars should spawn side-by-side with generous separation");
+  assert.ok(Math.abs(room.arena.positions.s1.x-room.arena.positions.s2.x)<2,
+    "the first pair should receive an equal starting distance");
+  const pos = room.arena.positions.s1;
+  assert.equal(room.arena.trackId,"square");
+  const fast = room.arena.positions.s2;
+  Object.assign(fast,{x:560,y:140,updatedAt:0,checkpoint:0});
+  gm.arenaPosition(room,"s2",{x:700,y:140,angle:0});
+  assert.equal(fast.checkpoint,1,"crossing a checkpoint between packets must still register");
+  for (let lap=0;lap<3;lap++) for (const [x,y] of [[640,140],[590,370],[80,320],[130,90]]) {
+    pos.updatedAt=0;
+    gm.arenaPosition(room,"s1",{x,y,angle:0});
+  }
+  assert.equal(pos.lap,3);
+  assert.equal(room.arena.finished.s1.place,1);
+  assert.ok(last("arena:racer-finished"));
+  Object.assign(room.arena.positions.s1,{x:300,y:90,vx:220,vy:0,updatedAt:Date.now()-100});
+  Object.assign(room.arena.positions.s2,{x:328,y:90,vx:20,vy:0,updatedAt:Date.now()-100});
+  room.arena.finished={};room.arena.bumpCooldowns={};
+  gm.arenaPosition(room,"s1",{x:306,y:90,angle:0});
+  const impact=last("arena:bump").payload;
+  assert.equal(impact.racing,true,"car contact should broadcast a competitive impact");
+  assert.ok(impact.impulses.s1&&impact.impulses.s2,"both cars receive a directional bounce impulse");
+  assert.ok(impact.impulses.s1.x*impact.impulses.s2.x<=0,"collision impulses push the cars apart");
+  Object.assign(room.arena.positions.s1,{x:700,y:220,crashCooldownUntil:0});
+  assert.equal(gm.arenaCrash(room,"s1").ok,true);
+  assert.equal(room.arena.positions.s1.x,640,"a fallen car should return to the nearest centerline");
+  assert.equal(room.arena.positions.s1.y,220);
+  assert.ok(last("arena:racer-crashed"));
+});
+
+test("tab hopper: flaps are authoritative and pop-up collisions record distance", () => {
+  const { rm, gm, last } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  room.settings.mode = "flappy";
+  gm.startGame(room, "s1");
+  assert.equal(last("arena:start").payload.mode, "flappy");
+  assert.equal(last("arena:start").payload.obstacles.length, 28);
+  gm.arenaJump(room, "s1");
+  assert.equal(room.arena.positions.s1.vy, -285);
+  const progress=(Date.now()-room.arena.startedAt)*.12;
+  room.arena.obstacles=[{x:150+progress,gapY:250,gap:90}];
+  Object.assign(room.arena.positions.s1,{y:100,vy:0});
+  room.arena.physicsAt=Date.now()-55;
+  gm.tickArena(room);
+  assert.ok(room.arena.eliminated.s1,"hitting a pop-up should eliminate the tab");
+  assert.equal(last("round:results").payload.mode,"flappy");
+  assert.ok(Number.isFinite(last("round:results").payload.ranking.find((p)=>p.playerId==="s1").distance));
+});
+
+test("polygon pong: paddles move, misses cost three lives, and multiball grows", () => {
+  const { rm, gm, last } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  rm.joinRoom("s3", room.code, "Erik");
+  room.settings.mode = "pong";
+  gm.startGame(room, "s1");
+  assert.equal(last("arena:start").payload.pongSides,3);
+  assert.equal(room.arena.lives.s1,3);
+  gm.arenaPosition(room,"s1",{x:.8,y:0});
+  assert.equal(room.arena.positions.s1.paddleT,.8);
+  for(let miss=0;miss<3;miss++){
+    Object.assign(room.arena.balls[0],{x:300,y:24,vx:0,vy:-120});
+    room.arena.physicsAt=Date.now()-55;
+    gm.tickArena(room);
+  }
+  assert.equal(room.arena.lives.s1,0);
+  assert.ok(room.arena.eliminated.s1);
+  room.arena.balls=[{id:1,x:360,y:220,vx:170,vy:100}];
+  room.arena.nextBallAt=Date.now()-1;room.arena.physicsAt=Date.now();
+  gm.tickArena(room);
+  assert.equal(room.arena.balls.length,2);
+  assert.equal(last("arena:pong-ball").payload.count,2);
+});
+
+test("choose a door: safe, damage, scramble, and elimination resolve server-side", () => {
+  const { rm, gm, last } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  rm.joinRoom("s3", room.code, "Erik");
+  rm.joinRoom("s4", room.code, "Mina");
+  room.settings.mode = "doors";
+  gm.startGame(room, "s1");
+  room.doors.effects = ["safe", "damage", "inconvenience", "eliminate"];
+  room.doors.positions.s1 = { x: 10, y: 100, updatedAt: 0 };
+  gm.doorsPosition(room, "s1", { x: 20, y: 80 });
+  assert.equal(room.doors.choices.s1, 0, "crossing a door threshold locks that door");
+  gm.chooseDoor(room, "s2", 1);
+  gm.chooseDoor(room, "s3", 2);
+  gm.chooseDoor(room, "s4", 3);
+  const reveal = last("doors:reveal").payload;
+  assert.equal(reveal.effects[2], "inconvenience");
+  assert.equal(room.doors.hearts.s2, 1);
+  assert.equal(room.doors.handicaps.s3, true);
+  assert.equal(room.doors.eliminated.s4, true);
+});
+
+test("red light: green presses advance, red presses eliminate, finishers win", () => {
+  const { rm, gm, last } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  rm.joinRoom("s3", room.code, "Erik");
+  room.settings.mode = "redlight";
+  room.settings.rounds = 1;
+  gm.startGame(room, "s1");
+
+  assert.equal(room.redlight.controllerId, "s1");
+  assert.equal(gm.redLightPress(room, "s1").ok, false);
+  gm.redLightPress(room, "s2");
+  assert.equal(room.redlight.players.s2.progress, 2);
+  assert.equal(gm.redLightControl(room, "s1", "feint").ok, true);
+  assert.equal(room.redlight.light, "green", "a feint must not change the real light");
+  assert.equal(room.redlight.battery <= 88, true, "a feint should consume battery");
+  room.redlight.battery = 19;
+  room.redlight.batteryUpdatedAt = Date.now();
+  assert.equal(gm.redLightControl(room, "s1", "toggle").ok, false, "low battery blocks red");
+  room.redlight.battery = 100;
+  gm.redLightControl(room, "s1", "toggle");
+  room.redlight.players.s2.lastPress = 0;
+  gm.redLightPress(room, "s2");
+  assert.equal(room.redlight.players.s2.eliminated, true);
+
+  gm.redLightControl(room, "s1", "toggle");
+  for (let i = 0; i < 50; i++) {
+    room.redlight.players.s3.lastPress = 0;
+    gm.redLightPress(room, "s3");
+  }
+  assert.equal(room.state, GAME_STATES.RESULTS);
+  const result = last("round:results").payload;
+  assert.equal(result.mode, "redlight");
+  assert.equal(result.ranking[0].playerId, "s3");
+  assert.equal(result.ranking[0].finished, true);
+  assert.equal(result.ranking[1].eliminated, true);
+  assert.equal(result.ranking[2].isController, true);
+  assert.equal(result.ranking[2].pointsAwarded, 25);
+});
+
+test("hide & blow up: choices stay secret until attack and survivors score", () => {
+  const { rm, gm, last, events } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  rm.joinRoom("s3", room.code, "Erik");
+  rm.joinRoom("s4", room.code, "Mina");
+  room.settings.mode = "hidebomb";
+  room.settings.rounds = 1;
+  gm.startGame(room, "s1");
+
+  assert.equal(room.hidebomb.bomberId, "s1");
+  gm.hideBombChoose(room, "s2", 0);
+  gm.hideBombChoose(room, "s3", 1);
+  gm.hideBombChoose(room, "s4", 2);
+  const publicProgress = last("hidebomb:progress").payload;
+  assert.equal("choices" in publicProgress, false, "public progress must not leak hiding places");
+  assert.equal(room.hidebomb.stage, "hide", "players may change their last choice until time expires");
+  gm.startHideBombAttack(room);
+  gm.hideBombAttack(room, "s1", 0);
+  assert.equal(room.hidebomb.stage, "ignite");
+  assert.equal(last("hidebomb:ignite").payload.target, 0);
+  gm.resolveHideBombAttack(room);
+  const reveal = last("hidebomb:reveal").payload;
+  assert.equal(reveal.eliminated.includes("s2"), true);
+  assert.equal(reveal.choices.length, 1, "only the fired cannon may reveal occupants");
+  assert.equal(reveal.choices[0].playerId, "s2");
+
+  gm.startHideBombAttack(room);
+  assert.equal(room.hidebomb.choices.s3, 1, "survivors must remain in their original cannon");
+  gm.hideBombAttack(room, "s1", 1);
+  gm.resolveHideBombAttack(room);
+  gm.startHideBombAttack(room);
+  gm.hideBombAttack(room, "s1", 3);
+  gm.resolveHideBombAttack(room);
+  assert.equal(room.hidebomb.stage, "reveal", "final explosion should remain visible before results");
+  gm.finishHideBombRound(room);
+
+  assert.equal(room.state, GAME_STATES.RESULTS);
+  const result = last("round:results").payload;
+  assert.equal(result.mode, "hidebomb");
+  assert.equal(result.ranking.find((r) => r.playerId === "s4").pointsAwarded, 100);
+  assert.equal(result.ranking.find((r) => r.playerId === "s1").pointsAwarded, 0);
+  assert.equal(events.some((e) => e.event === "hidebomb:reveal"), true);
+});
+
+test("timeline placement correctness handles before/between/after and ties", () => {
+  const { gm } = harness();
+  const cards = [{ year: 1900 }, { year: 1950 }, { year: 2000 }];
+  // slot 0 = before first; slot 3 = after last; slots 1,2 = between.
+  assert.equal(gm.isPlacementCorrect(cards, 0, 1850), true);
+  assert.equal(gm.isPlacementCorrect(cards, 0, 1970), false);
+  assert.equal(gm.isPlacementCorrect(cards, 1, 1925), true);   // between 1900 and 1950
+  assert.equal(gm.isPlacementCorrect(cards, 2, 1975), true);   // between 1950 and 2000
+  assert.equal(gm.isPlacementCorrect(cards, 3, 2020), true);   // after last
+  assert.equal(gm.isPlacementCorrect(cards, 3, 1975), false);
+  assert.equal(gm.isPlacementCorrect(cards, 1, 1900), true);   // "at exactly" a boundary
+});
+
+test("timeline team-vote (3+ players): majority places the card and correct votes score", () => {
+  const { rm, gm, last, events } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  rm.joinRoom("s3", room.code, "Erik");
+  room.settings.mode = "timeline";
+  room.settings.target = 3;
+
+  gm.startGame(room, "s1");
+  assert.equal(room.hitster.teamVote, true, "3 players should trigger team voting");
+  assert.equal(room.sharedTimeline.length, 1, "seed card on the shared timeline");
+  const t0 = last("turn:started").payload;
+  assert.equal(t0.teamVote, true);
+  assert.equal(t0.card.year, undefined, "year leaked in team payload");
+
+  function correctSlotFor(card) {
+    const sorted = room.sharedTimeline.slice().sort((a, b) => a.year - b.year);
+    let slot = sorted.findIndex((c) => card.year <= c.year);
+    return slot === -1 ? sorted.length : slot;
+  }
+
+  let guard = 0;
+  while (room.state === GAME_STATES.QUESTION && guard++ < 200) {
+    const slot = correctSlotFor(room.currentCard);
+    for (const id of ["s1", "s2", "s3"]) {
+      gm.timelineVote(room, id, slot);
+      gm.timelineLock(room, id, true);
+    }
+    // Resolving emits a result; ensure it happened.
+    assert.ok(last("timeline:result"), "a vote should resolve to a result");
+  }
+  assert.equal(room.state, GAME_STATES.FINISHED);
+  const fin = last("game:finished").payload;
+  assert.ok(fin.standings[0].score >= 3);
+  // Since everyone voted correctly, the shared timeline grew beyond the seed.
+  assert.ok(room.sharedTimeline.length > 1);
+});
+
+test("timeline team-vote: changing a pick unlocks it, and a wrong majority discards", () => {
+  const { rm, gm, last } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  rm.joinRoom("s3", room.code, "Erik");
+  room.settings.mode = "timeline";
+  room.settings.target = 20; // high so the game doesn't end mid-test
+
+  gm.startGame(room, "s1");
+  const seedLen = room.sharedTimeline.length;
+  const card = room.currentCard;
+  const sorted = room.sharedTimeline.slice().sort((a, b) => a.year - b.year);
+  // Deliberately wrong slot for everyone (opposite end).
+  const correct = sorted.findIndex((c) => card.year <= c.year);
+  const wrong = correct === 0 ? sorted.length : 0;
+
+  gm.timelineVote(room, "s1", wrong);
+  gm.timelineLock(room, "s1", true);
+  // Re-voting unlocks.
+  gm.timelineVote(room, "s1", wrong);
+  assert.equal(room.votes["s1"].locked, false);
+  gm.timelineLock(room, "s1", true);
+  gm.timelineVote(room, "s2", wrong); gm.timelineLock(room, "s2", true);
+  gm.timelineVote(room, "s3", wrong); gm.timelineLock(room, "s3", true);
+
+  const res = last("timeline:result").payload;
+  assert.equal(res.majorityCorrect, false);
+  // Wrong majority -> card discarded, shared timeline unchanged.
+  assert.equal(room.sharedTimeline.length, seedLen);
+});
+
+test("timeline (Hitster): first to the target score wins; card years stay hidden", () => {
+  const { rm, gm, last, events } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  room.settings.mode = "timeline";
+  room.settings.target = 5;
+
+  gm.startGame(room, "s1");
+  assert.equal(room.state, GAME_STATES.QUESTION);
+  // Each player seeded with one card, zero points.
+  assert.equal(room.players["s1"].cards.length, 1);
+  assert.equal(room.players["s1"].score, 0);
+
+  // The public turn payload must not leak the year.
+  const t0 = last("turn:started").payload;
+  assert.equal(t0.card.year, undefined, "card year leaked");
+  assert.ok(t0.timelines.length === 2);
+
+  // Play: the active player always places the card in its truly-correct slot.
+  let guard = 0;
+  while (room.state === GAME_STATES.QUESTION && guard++ < 500) {
+    const activeId = room.turnOrder[room.turnIndex % room.turnOrder.length];
+    const player = room.players[activeId];
+    const sorted = player.cards.slice().sort((a, b) => a.year - b.year);
+    const year = room.currentCard.year;
+    // Find the correct slot for this year.
+    let slot = sorted.findIndex((c) => year <= c.year);
+    if (slot === -1) slot = sorted.length;
+    const res = gm.timelinePlace(room, activeId, slot);
+    assert.equal(res.ok, true);
+  }
+
+  assert.equal(room.state, GAME_STATES.FINISHED);
+  const fin = last("game:finished").payload;
+  assert.equal(fin.mode, "timeline");
+  assert.ok(fin.standings[0].score >= 5, "winner should reach the target");
+  // A result event was emitted for placements.
+  assert.ok(events.some((e) => e.event === "timeline:result"));
+});
