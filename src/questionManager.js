@@ -73,7 +73,7 @@ const mapAsQuestions = mapPlaces.map((p) => ({
 function poolForMode(mode) {
   if (mode === "timeline") return timelineAsQuestions;
   if (mode === "map") return mapAsQuestions;
-  if (["bomb", "platformer", "drawing", "pushy", "redlight", "hidebomb", "colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "pong", "doors"].includes(mode)) return [];
+  if (["bomb", "platformer", "drawing", "pushy", "redlight", "hidebomb", "colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "runner", "painter", "pong", "doors"].includes(mode)) return [];
   return questions; // trivia, curling
 }
 

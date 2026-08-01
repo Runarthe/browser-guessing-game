@@ -29,7 +29,7 @@ const NAME_MAX = 20;
 const ROOM_TTL_MS = 60 * 60 * 1000; // ~1 hour
 
 // Available game modes and settings bounds.
-const GAME_MODES = ["trivia", "timeline", "curling", "bomb", "map", "platformer", "drawing", "pushy", "redlight", "hidebomb", "colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "pong", "doors"];
+const GAME_MODES = ["trivia", "timeline", "curling", "bomb", "map", "platformer", "drawing", "pushy", "redlight", "hidebomb", "colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "runner", "painter", "pong", "doors"];
 const ALLOWED_ROUNDS = [3, 5, 7, 10];
 const ALLOWED_SECONDS = [20, 30, 45, 60, 90];
 // Hitster (timeline) target: first player to this many cards wins.

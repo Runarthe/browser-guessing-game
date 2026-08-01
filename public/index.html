@@ -168,16 +168,15 @@
         <div id="curling-area" class="hidden">
           <p class="category-chip" id="turn-category"></p>
           <h2 class="question-text" id="turn-question">…</h2>
+          <canvas id="curling-canvas" class="curling-canvas" width="500" height="680"></canvas>
           <ul class="shot-list" id="shot-list"></ul>
           <div id="curling-order" class="turn-order"></div>
           <div id="curling-input" class="hidden">
-            <label class="field-label" for="turn-guess">Your shot</label>
-            <div class="guess-row">
-              <input id="turn-guess" class="text-input guess-input" type="number"
-                     inputmode="decimal" autocomplete="off" placeholder="0" />
-              <span class="unit" id="turn-unit"></span>
-            </div>
-            <button id="turn-submit" class="btn btn-primary btn-block">Take your shot</button>
+            <input id="turn-guess" type="hidden" value="0" />
+            <span class="hidden" id="turn-unit"></span>
+            <p class="curling-meter-status" id="curling-meter-status">Press once to lock direction</p>
+            <span class="hidden" id="curling-power-value">0</span>
+            <button id="turn-submit" class="btn btn-primary btn-block">LOCK DIRECTION</button>
           </div>
           <p class="muted center" id="curling-wait"></p>
         </div>
@@ -371,6 +370,7 @@
         <h2 class="question-text" id="arena-title">Survive!</h2>
         <p class="muted small center" id="arena-hint"></p>
         <canvas id="arena-canvas" class="arena-canvas" width="720" height="440"></canvas>
+        <div id="arena-painter-legend" class="painter-legend hidden"></div>
         <div class="platformer-controls" id="arena-controls">
           <button class="btn btn-secondary" data-arena="left">◀</button>
           <button class="btn btn-secondary" data-arena="up">▲</button>
@@ -472,6 +472,6 @@
   <script src="characters.js?v=20260725-15"></script>
   <script src="arena25d.js?v=20260725-15"></script>
   <script src="vanishMaps.js?v=20260727-45"></script>
-  <script src="app.js?v=20260730-58"></script>
+  <script src="app.js?v=20260801-86"></script>
 </body>
 </html>

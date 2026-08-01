@@ -122,7 +122,7 @@ class GameManager {
 
   /** Content-availability check for a mode; returns an error string or null. */
   contentError(room, mode, categories) {
-    if (["bomb", "platformer", "drawing", "pushy", "redlight", "hidebomb", "colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "pong", "doors"].includes(mode)) return null;
+    if (["bomb", "platformer", "drawing", "pushy", "redlight", "hidebomb", "colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "runner", "painter", "pong", "doors"].includes(mode)) return null;
     if (mode === "timeline") {
       const connected = this.roomManager.connectedPlayers(room).length;
       if (availableQuestionCount("timeline", categories) < connected + 4) {
@@ -233,7 +233,7 @@ class GameManager {
       this.beginRound(room);
       return;
     }
-    if (["colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "pong"].includes(mode)) {
+    if (["colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "runner", "painter", "pong"].includes(mode)) {
       room.arena = null;
       this.beginRound(room);
       return;
@@ -320,7 +320,7 @@ class GameManager {
     if (mode === "pushy") return this.beginPushyRound(room);
     if (mode === "redlight") return this.beginRedLightRound(room);
     if (mode === "hidebomb") return this.beginHideBombRound(room);
-    if (["colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "pong"].includes(mode)) return this.beginArenaRound(room, mode);
+    if (["colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "runner", "painter", "pong"].includes(mode)) return this.beginArenaRound(room, mode);
     if (mode === "doors") return this.beginDoorsRound(room);
     return this.beginSimultaneousRound(room); // trivia, map
   }
@@ -376,7 +376,7 @@ class GameManager {
     if (!player || !player.connected) {
       return { ok: false, error: "You are not in this room." };
     }
-    if (player.guess !== null) {
+    if (player.guess !== null && mode !== "curling") {
       return { ok: false, error: "You have already submitted a guess." };
     }
     if (TURN_MODES.has(mode) && room.turnOrder[room.turnIndex] !== socketId) {
@@ -393,6 +393,18 @@ class GameManager {
         return { ok: false, error: "Tap the map to place your pin." };
       }
       player.guess = { lat, lng };
+    } else if(mode==="curling"){
+      if(Date.now()<(room.curlingPlaybackUntil||0))return {ok:false,error:"Wait for the current stone to settle."};
+      const shot=typeof rawGuess==="object"&&rawGuess?rawGuess:{direction:0,power:Number(rawGuess)/1000};
+      const direction=Number(shot.direction),power=Number(shot.power);
+      if(!Number.isFinite(direction)||!Number.isFinite(power)||direction < -1||direction > 1||power < 0||power > 1)
+        return {ok:false,error:"Invalid curling shot."};
+      const guess={direction,power},throwNumber=(room.curlingThrows?.[socketId]||0)+1;
+      const stoneId=`${socketId}:${throwNumber}`;
+      room.curlingTrajectory=this.simulateCurlingShot(room,socketId,stoneId,guess);
+      room.curlingThrows[socketId]=throwNumber;
+      room.curlingShotLog.push({stoneId,playerId:socketId,guess,throwNumber});
+      room.curlingPlaybackUntil=Date.now()+room.curlingTrajectory.length*25+1200;
     } else {
       const guess = typeof rawGuess === "string" ? Number(rawGuess) : rawGuess;
       if (!Number.isFinite(guess)) {
@@ -407,7 +419,7 @@ class GameManager {
 
     if (mode === "curling") {
       // Reveal this shot to everyone, then move to the next player.
-      this.emitRoom(room.code, "turn:update", this.curlingState(room, socketId, player.guess));
+      this.emitRoom(room.code, "turn:update", this.curlingState(room, socketId, room.curlingShotLog.at(-1)?.guess));
       this.advanceCurling(room);
     } else {
       this.emitRoom(room.code, "round:progress", this.progress(room));
@@ -440,11 +452,19 @@ class GameManager {
   }
 
   beginCurlingRound(room) {
-    const question = room.questions[room.roundIndex];
+    const question = {
+      id:`curling-shot-${room.roundIndex}`,
+      text:"Land three stones in the marked scoring zones. The thin back strip is worth the most!",
+      unit:"power",category:"Skill shot",answer:724
+    };
     room.currentQuestion = question;
     room.state = GAME_STATES.QUESTION;
-    room.turnOrder = this.buildTurnOrder(room);
+    const baseOrder=this.buildTurnOrder(room);
+    room.turnOrder = [...baseOrder,...baseOrder,...baseOrder];
     room.turnIndex = 0;
+    room.curlingStones=[];
+    room.curlingThrows={};room.curlingShotLog=[];room.curlingPlaybackUntil=0;
+    room.curlingTrajectory=null;
     this.startCurlingTurn(room);
   }
 
@@ -456,9 +476,10 @@ class GameManager {
     ) {
       room.turnIndex++;
     }
-    if (room.turnIndex >= room.turnOrder.length) return this.revealResults(room);
+    if (room.turnIndex >= room.turnOrder.length) return this.finishCurlingRound(room);
 
-    room.deadline = Date.now() + this.turnDurationMs(room);
+    const playbackWait=Math.max(0,(room.curlingPlaybackUntil||0)-Date.now());
+    room.deadline = Date.now() + this.turnDurationMs(room)+playbackWait;
     this.emitRoom(room.code, "turn:started", {
       mode: "curling",
       roundNumber: room.roundIndex + 1,
@@ -467,6 +488,7 @@ class GameManager {
       activePlayerId: room.turnOrder[room.turnIndex],
       order: this.curlingOrderView(room),
       shots: this.curlingShots(room),
+      stones:room.curlingStones,
       deadline: room.deadline
     });
 
@@ -481,34 +503,39 @@ class GameManager {
         }
         this.advanceCurling(cur);
       }
-    }, this.turnDurationMs(room));
+    }, this.turnDurationMs(room)+playbackWait);
     this.timers.set(room.code, handle);
   }
 
   advanceCurling(room) {
     room.turnIndex++;
-    if (room.turnIndex >= room.turnOrder.length) return this.revealResults(room);
+    if (room.turnIndex >= room.turnOrder.length) return this.finishCurlingRound(room);
     this.startCurlingTurn(room);
   }
 
   curlingOrderView(room) {
-    return room.turnOrder.map((id, i) => ({
+    const activeId=room.turnOrder[room.turnIndex];
+    return this.buildTurnOrder(room).map((id) => ({
       playerId: id,
       name: room.players[id]?.name ?? "?",
-      done: room.players[id]?.guess !== null || !room.players[id]?.connected,
-      active: i === room.turnIndex
+      done: (room.curlingThrows?.[id]||0)>=3 || !room.players[id]?.connected,
+      active: id === activeId,
+      stonesThrown:room.curlingThrows?.[id]||0,stonesTotal:3
     }));
   }
 
   curlingShots(room) {
     // Guesses already made this round (revealed to all; answer stays hidden).
-    return room.turnOrder
-      .filter((id) => room.players[id]?.guess !== null && room.players[id]?.guess !== undefined)
-      .map((id) => ({
-        playerId: id,
-        name: room.players[id].name,
-        guess: room.players[id].guess
-      }));
+    return (room.curlingShotLog||[]).map((entry) => {
+      const id=entry.playerId;
+      return {
+        stoneId:entry.stoneId,playerId:id,
+        name: room.players[id]?.name||"?",
+        avatar: room.players[id]?.avatar,
+        guess:entry.guess,throwNumber:entry.throwNumber,
+        stone:room.curlingStones.find((stone)=>stone.stoneId===entry.stoneId)
+      };
+    });
   }
 
   curlingState(room, lastPlayerId, lastGuess) {
@@ -518,8 +545,68 @@ class GameManager {
       lastGuess,
       lastName: room.players[lastPlayerId]?.name,
       order: this.curlingOrderView(room),
-      shots: this.curlingShots(room)
+      shots: this.curlingShots(room),
+      stones:room.curlingStones,
+      trajectory:room.curlingTrajectory
     };
+  }
+
+  simulateCurlingShot(room,playerId,stoneId,shot){
+    const bodies=(room.curlingStones||[]).map((s)=>({...s,vx:0,vy:0}));
+    const angle=shot.direction*18*Math.PI/180,speed=340+shot.power*330;
+    bodies.push({playerId,stoneId,x:0,y:720,vx:Math.sin(angle)*speed,vy:-Math.cos(angle)*speed,off:false});
+    const frames=[],dt=1/120,radius=18;
+    for(let step=0;step<1440;step++){
+      let moving=false;
+      for(const b of bodies){
+        if(b.off)continue;
+        b.x+=b.vx*dt;b.y+=b.vy*dt;
+        const v=Math.hypot(b.vx,b.vy);
+        if(v>0){
+          const next=Math.max(0,v-240*dt),ratio=v?next/v:0;b.vx*=ratio;b.vy*=ratio;
+          if(next>3)moving=true;
+        }
+        // A stone falls once its centre crosses the board boundary: at that
+        // point more than half of its body is unsupported.
+        if(Math.abs(b.x)>150||b.y<-13||b.y>808){b.off=true;b.vx=0;b.vy=0;}
+      }
+      for(let i=0;i<bodies.length;i++)for(let j=i+1;j<bodies.length;j++){
+        const a=bodies[i],b=bodies[j];if(a.off||b.off)continue;
+        let dx=b.x-a.x,dy=b.y-a.y,dist=Math.hypot(dx,dy);
+        if(dist<=0||dist>=radius*2)continue;
+        const nx=dx/dist,ny=dy/dist,overlap=radius*2-dist;
+        a.x-=nx*overlap/2;a.y-=ny*overlap/2;b.x+=nx*overlap/2;b.y+=ny*overlap/2;
+        const relative=(b.vx-a.vx)*nx+(b.vy-a.vy)*ny;
+        if(relative<0){
+          const impulse=-(1+.9)*relative/2;
+          a.vx-=impulse*nx;a.vy-=impulse*ny;b.vx+=impulse*nx;b.vy+=impulse*ny;
+          moving=true;
+        }
+      }
+      if(step%3===0)frames.push(bodies.map(({playerId,stoneId,x,y,off})=>({playerId,stoneId,x,y,off})));
+      if(!moving&&step>10)break;
+    }
+    room.curlingStones=bodies.map(({playerId,stoneId,x,y,off})=>({playerId,stoneId,x,y,off}));
+    return frames;
+  }
+
+  finishCurlingRound(room){
+    this.disarmTimer(room);
+    const stonePoints=(stone)=>stone.off||Math.abs(stone.x)>150?0:stone.y<22?5:stone.y<108?3:stone.y<162?2:stone.y<220?1:0;
+    const ranking=this.roomManager.connectedPlayers(room).map((p)=>{
+      const stones=room.curlingStones.filter((s)=>s.playerId===p.id),score=stones.reduce((sum,s)=>sum+stonePoints(s),0);
+      const bestDistance=Math.min(9999,...stones.filter(s=>!s.off).map(s=>Math.hypot(s.x,s.y-130)));
+      return {playerId:p.id,name:p.name,avatar:p.avatar,stones,score,distance:bestDistance,off:stones.every(s=>s.off)};
+    }).sort((a,b)=>b.score-a.score||a.distance-b.distance);
+    ranking.forEach((entry,index)=>{
+      entry.pointsAwarded=[100,60,30,10][index]||10;
+      room.players[entry.playerId].score+=entry.pointsAwarded;
+      entry.totalScore=room.players[entry.playerId].score;
+    });
+    room.state=GAME_STATES.RESULTS;room.deadline=null;
+    const payload={mode:"curling",ranking,roundNumber:room.roundIndex+1,totalRounds:room.totalRounds,
+      isFinalRound:room.roundIndex+1>=room.totalRounds};
+    room.lastResults=payload;this.emitRoom(room.code,"round:results",payload);
   }
 
   // ---- bomb (Nim-style hot potato) ------------------------------------------
@@ -1459,10 +1546,36 @@ class GameManager {
 
   // ---- shared survival arena (color floor, vanishing grid, bomb pass) -------
 
+  makeRunnerCourse(seed) {
+    // Small seeded generator: courses differ each round but every player in the
+    // room receives the identical obstacle and reward layout.
+    let value=(seed>>>0)||1;
+    const random=()=>((value=Math.imul(value,1664525)+1013904223>>>0)/4294967296);
+    const obstacles=[],coins=[],platforms=[];
+    let x=650;
+    for(let section=0;section<48;section++){
+      x+=205+Math.floor(random()*145);
+      const roll=random();
+      const type=roll<.14?"hanging":roll<.38?"bramble":roll<.62?"crystal":"stump";
+      obstacles.push({x,w:18+Math.floor(random()*15),h:26+Math.floor(random()*28),type});
+      // Some sections offer a rewarding upper route, reachable with one normal jump.
+      if(section>1&&section%5===Math.floor(random()*5)){
+        const y=205+Math.floor(random()*48),w=135+Math.floor(random()*70),px=x+130;
+        platforms.push({x:px,y,w});
+        for(let c=-1;c<=1;c++)coins.push({x:px+c*38,y:y-28});
+      }else{
+        const count=2+Math.floor(random()*4),arc=random()<.45;
+        for(let c=0;c<count;c++)coins.push({x:x+72+c*32,y:arc?286-Math.sin(c/(Math.max(1,count-1))*Math.PI)*58:284});
+      }
+    }
+    return {obstacles,coins,platforms,theme:["moonwood","sunset","crystal","storm"][seed%4],seed};
+  }
+
   beginArenaRound(room, mode) {
     const players = this.roomManager.connectedPlayers(room);
     const now = Date.now();
-    const duration = mode === "bombpass" ? 30000 : mode === "fire" ? 60000 : mode === "racing" ? 75000 : mode === "flappy" ? 45000 : mode === "pong" ? 60000 : 26000;
+    const runnerCourse=mode==="runner"?this.makeRunnerCourse((now^room.roundIndex*2654435761^room.code.split("").reduce((n,c)=>n+c.charCodeAt(0),0))>>>0):null;
+    const duration = mode === "bombpass" ? 30000 : mode === "fire" ? 60000 : mode === "racing" ? 75000 : ["flappy","runner"].includes(mode) ? 600000 : mode === "painter" ? 42000 : mode === "pong" ? 60000 : 26000;
     // Vanishing Grid: pick a "map" (grid pattern + shape) for this round.
     const vmap = mode === "vanish" ? VanishMaps.pickVMap(now) : null;
     room.arena = {
@@ -1472,9 +1585,13 @@ class GameManager {
       colorDangerAt: 0, colorScrambleUntil: 0, bumpCooldowns: {},
       mapId: vmap ? vmap.id : mode === "fire" ? ["classic","fortress","switchback"][room.roundIndex % 3] : null,
       bombs: [], blasts: [], crates: [], powerups: [], upgrades: {}, finished: {}, finishOrder: [],
-      obstacles: mode==="flappy"?Array.from({length:28},(_,i)=>({
+      obstacles: mode==="flappy"?Array.from({length:40},(_,i)=>({
         x:560+i*185,gapY:115+((i*83+room.roundIndex*47)%210),gap:Math.max(92,126-i)
-      })):[],
+      })):runnerCourse?.obstacles||[],
+      runnerCoins:runnerCourse?.coins||[],runnerPlatforms:runnerCourse?.platforms||[],
+      runnerTheme:runnerCourse?.theme||null,runnerSeed:runnerCourse?.seed||0,
+      painterCols:18,painterRows:11,painterTerritory:{},painterTrails:{},painterSpawns:{},
+      painterBuckets:[],painterNextBucketAt:mode==="painter"?now+3500:0,painterBucketId:0,
       balls:mode==="pong"?[{id:1,x:360,y:220,vx:175,vy:115}]:[],
       lives:{},playerSides:{},pongSides:mode==="pong"?(players.length===2?4:Math.max(3,players.length)):0,
       nextBallAt:mode==="pong"?now+9000:0,
@@ -1496,9 +1613,15 @@ class GameManager {
         [x,y]=starts[index%starts.length];
       }
       if(mode==="flappy"){x=150;y=205+(index%4)*12;}
+      if(mode==="runner"){x=135;y=326;}
+      if(mode==="painter"){
+        const starts=[[100,80],[620,360],[620,80],[100,360],[360,80],[360,360]];
+        [x,y]=starts[index%starts.length];
+      }
       if(mode==="pong"){
         room.arena.lives[p.id]=3;
-        room.arena.playerSides[p.id]=Math.floor(index*room.arena.pongSides/players.length);
+        const rotated=(index+room.roundIndex)%players.length;
+        room.arena.playerSides[p.id]=Math.floor(rotated*room.arena.pongSides/players.length);
       }
       if (mode === "racing") {
         const track=RACE_TRACKS.find((item)=>item.id===room.arena.trackId)||RACE_TRACKS[0];
@@ -1515,9 +1638,16 @@ class GameManager {
       if (vmap) { const s = VanishMaps.snapPresent(vmap.mask, x, y); x = s[0]; y = s[1]; } // spawn on a solid tile
       room.arena.positions[p.id] = {
         x, y, vx: 0, vy: 0, updatedAt: 0, jumpUntil: 0, jumpCooldownUntil: 0, layer: 0,
-        angle: mode==="racing"?spawnAngle:null, lap:0, checkpoint:0,paddleT:.5
+        angle: mode==="racing"?spawnAngle:null, lap:0, checkpoint:0,paddleT:.5,
+        distance:0,coins:0,collectedCoins:{},rolling:false,perfects:0,boostUntil:0,groundY:326
       };
       room.arena.upgrades[p.id]={range:2,bombs:1,speed:0};
+      if(mode==="painter"){
+        const col=Math.max(1,Math.min(16,Math.floor(x/40))),row=Math.max(1,Math.min(9,Math.floor(y/40)));
+        room.arena.painterSpawns[p.id]={x:col*40+20,y:row*40+20};room.arena.painterTrails[p.id]=[];
+        room.arena.positions[p.id].x=col*40+20;room.arena.positions[p.id].y=row*40+20;
+        for(let rr=row-1;rr<=row+1;rr++)for(let cc=col-1;cc<=col+1;cc++)room.arena.painterTerritory[`${cc}:${rr}`]=p.id;
+      }
     });
     if (mode === "bombpass" && players.length) {
       room.arena.holderId = players[Math.floor(Math.random() * players.length)].id;
@@ -1537,13 +1667,19 @@ class GameManager {
       cycle: a.cycle, holderId: a.holderId, tileLayout: a.tileLayout,
       dangerAt: a.colorDangerAt, scrambleUntil: a.colorScrambleUntil,
       bombs: a.bombs, blasts: a.blasts, crates: a.crates, powerups:a.powerups,
-      trackId:a.trackId,obstacles:a.obstacles,balls:a.balls,pongSides:a.pongSides,playerSides:a.playerSides,lives:a.lives,
+      trackId:a.trackId,obstacles:a.obstacles,runnerCoins:a.runnerCoins,runnerPlatforms:a.runnerPlatforms,
+      runnerTheme:a.runnerTheme,runnerSeed:a.runnerSeed,
+      painterCols:a.painterCols,painterRows:a.painterRows,painterTerritory:a.painterTerritory,painterTrails:a.painterTrails,
+      painterBuckets:a.painterBuckets,
+      balls:a.balls,pongSides:a.pongSides,playerSides:a.playerSides,lives:a.lives,
       players: Object.entries(a.positions).map(([id, pos]) => ({
         playerId: id, name: room.players[id]?.name, avatar: room.players[id]?.avatar,
         x: pos.x, y: pos.y, vx: pos.vx || 0, vy: pos.vy || 0, eliminated: !!a.eliminated[id],
         jumpingUntil: pos.jumpUntil || 0, layer: pos.layer || 0,
         angle: pos.angle, lap: pos.lap || 0, checkpoint: pos.checkpoint || 0, distance:pos.distance||0,
-        finished: !!a.finished[id], upgrades:a.upgrades[id],paddleT:pos.paddleT??.5,lives:a.lives[id]
+        finished: !!a.finished[id], upgrades:a.upgrades[id],paddleT:pos.paddleT??.5,lives:a.lives[id],
+        coins:pos.coins||0,perfects:pos.perfects||0,rolling:!!pos.rolling,collectedCoins:Object.keys(pos.collectedCoins||{}).map(Number)
+        ,boostUntil:pos.boostUntil||0,painterSpeedUntil:pos.painterSpeedUntil||0,painterStunnedUntil:pos.painterStunnedUntil||0
       })),
       tiles: Object.entries(a.tiles).map(([key, value]) => ({ key, ...value }))
     };
@@ -1551,7 +1687,7 @@ class GameManager {
 
   armArenaTick(room) {
     this.disarmTimer(room);
-    const tickMs = ["colorfloor","vanish","fire","racing","flappy","pong"].includes(room.arena?.mode) ? 55 : 120;
+    const tickMs = ["colorfloor","vanish","fire","racing","flappy","runner","painter","pong"].includes(room.arena?.mode) ? 55 : 120;
     this.timers.set(room.code, this.setTimer(() => {
       const current = this.roomManager.getRoom(room.code);
       if (!current || current.state !== GAME_STATES.QUESTION || !current.arena) return;
@@ -1628,6 +1764,16 @@ class GameManager {
         if (landing) pos.landFloor = -1;              // bonus consumed once you've touched down
         if (allGone) dropThrough();
       }
+    } else if(a.mode==="painter"){
+      a.painterBuckets=a.painterBuckets.filter((bucket)=>now<bucket.expiresAt);
+      if(now>=a.painterNextBucketAt&&a.painterBuckets.length<3){
+        const types=["cross","splash","burst","speed","roller","lightning"],type=types[Math.floor(Math.random()*types.length)];
+        a.painterBuckets.push({id:++a.painterBucketId,col:1+Math.floor(Math.random()*(a.painterCols-2)),row:1+Math.floor(Math.random()*(a.painterRows-2)),type,
+          orientation:type==="roller"?(Math.random()<.5?"horizontal":"vertical"):null,expiresAt:now+8500});
+        a.painterNextBucketAt=now+4500+Math.floor(Math.random()*2500);
+        this.emitRoom(room.code,"arena:painter-buckets",{buckets:a.painterBuckets});
+      }
+      if(now>=a.deadline)return this.finishArenaRound(room);
     } else if(a.mode==="pong"){
       const dt=Math.min(.06,(now-(a.physicsAt||now))/1000);a.physicsAt=now;
       if(now>=a.nextBallAt&&a.balls.length<4){
@@ -1640,38 +1786,52 @@ class GameManager {
       const sideOwners={};for(const [id,side]of Object.entries(a.playerSides))sideOwners[side]=id;
       for(const ball of a.balls){
         ball.x+=ball.vx*dt;ball.y+=ball.vy*dt;
-        let hitSide=-1,maxProjection=-Infinity,nx=0,ny=0;
-        for(let side=0;side<sides;side++){
-          const angle=-Math.PI/2+side*Math.PI*2/sides,nxx=Math.cos(angle),nyy=Math.sin(angle);
-          const projection=(ball.x-360)*nxx+(ball.y-220)*nyy;
-          if(projection>maxProjection){maxProjection=projection;hitSide=side;nx=nxx;ny=nyy;}
-        }
-        const ownerId=sideOwners[hitSide],active=ownerId&&!a.eliminated[ownerId];
-        const outward=ball.vx*nx+ball.vy*ny,tx=-ny,ty=nx;
-        const along=(ball.x-360)*tx+(ball.y-220)*ty;
-        const paddleOffset=ownerId?((a.positions[ownerId].paddleT??.5)-.5)*Math.max(35,sideLength-105):0;
-        const paddleHit=active&&Math.abs(along-paddleOffset)<52;
-        if(maxProjection>=apothem-9&&outward>0&&(!active||paddleHit)){
-          ball.vx-=2*outward*nx;ball.vy-=2*outward*ny;
+        for(let pass=0;pass<2;pass++){
+          const crossed=[];
+          for(let side=0;side<sides;side++){
+            const angle=-Math.PI/2+side*Math.PI*2/sides,nx=Math.cos(angle),ny=Math.sin(angle);
+            const projection=(ball.x-360)*nx+(ball.y-220)*ny,outward=ball.vx*nx+ball.vy*ny;
+            if(projection>=apothem-9&&outward>0)crossed.push({side,nx,ny,projection,outward,
+              score:(projection-apothem)+outward*.025});
+          }
+          if(!crossed.length)break;
+          const hit=crossed.sort((x,y)=>y.score-x.score)[0],ownerId=sideOwners[hit.side];
+          const active=ownerId&&!a.eliminated[ownerId],tx=-hit.ny,ty=hit.nx;
+          const along=(ball.x-360)*tx+(ball.y-220)*ty;
+          const paddleOffset=ownerId?((a.positions[ownerId].paddleT??.5)-.5)*Math.max(35,sideLength-105):0;
+          const paddleHit=active&&Math.abs(along-paddleOffset)<52;
+          if(active&&!paddleHit){
+            if(hit.projection<=apothem+10)break;
+            a.lives[ownerId]=Math.max(0,a.lives[ownerId]-1);
+            this.emitRoom(room.code,"arena:pong-life",{playerId:ownerId,lives:a.lives[ownerId],side:hit.side});
+            if(a.lives[ownerId]===0)this.eliminateArena(room,ownerId,"miss");
+            const angle=.8+ball.id*1.37+now%1000/1000;
+            ball.x=360;ball.y=220;ball.vx=Math.cos(angle)*185;ball.vy=Math.sin(angle)*185;
+            break;
+          }
+          ball.vx-=2*hit.outward*hit.nx;ball.vy-=2*hit.outward*hit.ny;
           if(paddleHit){
             const english=(along-paddleOffset)/52;
             ball.vx+=tx*english*75;ball.vy+=ty*english*75;
           }
           const speed=Math.min(330,Math.hypot(ball.vx,ball.vy)*1.035);
           const length=Math.max(1,Math.hypot(ball.vx,ball.vy));ball.vx=ball.vx/length*speed;ball.vy=ball.vy/length*speed;
-          ball.x-=nx*Math.max(0,maxProjection-(apothem-10));ball.y-=ny*Math.max(0,maxProjection-(apothem-10));
-        }else if(active&&maxProjection>apothem+12){
-          a.lives[ownerId]=Math.max(0,a.lives[ownerId]-1);
-          this.emitRoom(room.code,"arena:pong-life",{playerId:ownerId,lives:a.lives[ownerId]});
-          if(a.lives[ownerId]===0)this.eliminateArena(room,ownerId,"miss");
-          const angle=.8+ball.id*1.37+now%1000/1000;
-          ball.x=360;ball.y=220;ball.vx=Math.cos(angle)*185;ball.vy=Math.sin(angle)*185;
+          ball.x-=hit.nx*Math.max(0,hit.projection-(apothem-10));
+          ball.y-=hit.ny*Math.max(0,hit.projection-(apothem-10));
         }
       }
       this.emitRoom(room.code,"arena:pong",{balls:a.balls,lives:a.lives,players:this.arenaPublic(room).players});
     } else if(a.mode==="flappy"){
       const dt=Math.min(.08,(now-(a.physicsAt||now))/1000);a.physicsAt=now;
       const progress=(now-a.startedAt)*.12;
+      if(a.obstacles.at(-1).x-progress<1000){
+        const additions=Array.from({length:12},(_,offset)=>{
+          const i=a.obstacles.length+offset;
+          return {x:560+i*185,gapY:115+((i*83+room.roundIndex*47)%210),gap:Math.max(92,126-i)};
+        });
+        a.obstacles.push(...additions);
+        this.emitRoom(room.code,"arena:flappy-obstacles",{obstacles:additions});
+      }
       for(const p of alive()){
         const pos=a.positions[p.id];pos.vy=(pos.vy||0)+620*dt;pos.y+=pos.vy*dt;pos.distance=progress;
         let hit=pos.y<18||pos.y>422;
@@ -1680,6 +1840,46 @@ class GameManager {
           if(Math.abs(screenX-150)<43&&(pos.y-15<obstacle.gapY-obstacle.gap/2||pos.y+15>obstacle.gapY+obstacle.gap/2)){hit=true;break;}
         }
         if(hit)this.eliminateArena(room,p.id,"popup");
+      }
+      this.emitRoom(room.code,"arena:positions",{players:this.arenaPublic(room).players});
+    } else if(a.mode==="runner"){
+      const dt=Math.min(.08,(now-(a.physicsAt||now))/1000);a.physicsAt=now;
+      for(const p of alive()){
+        const pos=a.positions[p.id],oldY=pos.y;
+        const pace=Math.min(.29,.145+(now-a.startedAt)/420000+(pos.coins||0)*.0025+(now<(pos.boostUntil||0)?.025:0));
+        pos.distance=(pos.distance||0)+pace*dt*1000;
+        pos.vy=(pos.vy||0)+980*dt;pos.y+=pos.vy*dt;pos.groundY=326;
+        // Land on a floating route only while descending through its top.
+        for(const platform of a.runnerPlatforms){
+          const sx=platform.x-pos.distance;
+          if(sx>95-platform.w/2&&sx<175+platform.w/2&&pos.vy>=0&&oldY<=platform.y&&pos.y>=platform.y){
+            pos.y=platform.y;pos.vy=0;pos.groundY=platform.y;break;
+          }
+        }
+        if(pos.y>=326){pos.y=326;pos.vy=0;pos.grounded=true;pos.groundY=326;}else pos.grounded=pos.vy===0;
+        for(const obstacle of a.obstacles){
+          const sx=obstacle.x-pos.distance,halfW=obstacle.w/2;
+          const runnerLeft=126,runnerRight=144,runnerTop=pos.rolling?pos.y-20:pos.y-38,runnerBottom=pos.y-2;
+          const hazardTop=obstacle.type==="hanging"?245:326-obstacle.h;
+          const hazardBottom=obstacle.type==="hanging"?292:326;
+          if(runnerRight>sx-halfW&&runnerLeft<sx+halfW&&runnerBottom>hazardTop&&runnerTop<hazardBottom){
+            this.eliminateArena(room,p.id,"obstacle");break;
+          }
+          if(!pos.lastCleared||obstacle.x>pos.lastCleared){
+            if(sx+halfW<122&&sx+halfW>95&&!a.eliminated[p.id]){
+              pos.lastCleared=obstacle.x;
+              const ideal=obstacle.type==="hanging"?pos.rolling:Math.abs(pos.y-(326-obstacle.h-15))<24;
+              if(ideal){pos.perfects=(pos.perfects||0)+1;pos.boostUntil=now+1300;this.emitRoom(room.code,"arena:runner-perfect",{playerId:p.id,type:obstacle.type==="hanging"?"roll":"jump"});}
+            }
+          }
+        }
+        for(let i=0;i<a.runnerCoins.length;i++){
+          if(pos.collectedCoins[i])continue;
+          const coin=a.runnerCoins[i],sx=coin.x-pos.distance;
+          if(Math.abs(sx-135)<24&&Math.abs(coin.y-(pos.y-20))<30){
+            pos.collectedCoins[i]=true;pos.coins++;this.emitRoom(room.code,"arena:runner-coin",{playerId:p.id,index:i,coins:pos.coins});
+          }
+        }
       }
       this.emitRoom(room.code,"arena:positions",{players:this.arenaPublic(room).players});
     } else if (a.mode === "fire") {
@@ -1700,9 +1900,11 @@ class GameManager {
     if (a.mode==="racing") {
       if (now>=a.deadline || Object.keys(a.finished).length>=this.roomManager.connectedPlayers(room).length)
         return this.finishArenaRound(room);
-    } else if(a.mode==="flappy"){
-      const count=this.roomManager.connectedPlayers(room).length;
-      if(now>=a.deadline||alive().length===0||(count>1&&alive().length<=1))return this.finishArenaRound(room);
+    } else if(["flappy","runner"].includes(a.mode)){
+      // The leader gets to keep flying after everyone else crashes.
+      if(alive().length===0)return this.finishArenaRound(room);
+    } else if(a.mode==="painter"){
+      if(now>=a.deadline)return this.finishArenaRound(room);
     } else if(a.mode==="pong"){
       const count=this.roomManager.connectedPlayers(room).length;
       if(now>=a.deadline||alive().length===0||(count>1&&alive().length<=1))return this.finishArenaRound(room);
@@ -1828,10 +2030,16 @@ class GameManager {
     const a = room.arena, pos = a.positions[socketId];
     if (!pos || a.eliminated[socketId]) return { ok: true };
     const now = Date.now();
+    if(a.mode==="painter"&&now<(pos.painterStunnedUntil||0))return {ok:true};
     if (now - pos.updatedAt < 35) return { ok: true };
     if(a.mode==="pong"){
       const paddleT=Number(raw.x);if(!Number.isFinite(paddleT))return {ok:false,error:"Invalid paddle position."};
       pos.paddleT=Math.max(0,Math.min(1,paddleT));pos.updatedAt=now;
+      return {ok:true};
+    }
+    if(a.mode==="runner"){
+      pos.rolling=!!raw.roll&&pos.y>=((pos.groundY||326)-2);
+      pos.updatedAt=now;
       return {ok:true};
     }
     const x = Number(raw.x), y = Number(raw.y);
@@ -1875,6 +2083,41 @@ class GameManager {
           }
         }
       }
+    }
+    if(a.mode==="painter"){
+      // Sample the whole travelled segment so fast packets cannot skip a tile.
+      const samples=Math.max(1,Math.ceil(Math.hypot(pos.x-oldX,pos.y-oldY)/18));
+      for(let step=0;step<=samples;step++){
+        const t=step/samples,x=oldX+(pos.x-oldX)*t,y=oldY+(pos.y-oldY)*t;
+        const col=Math.max(0,Math.min(a.painterCols-1,Math.floor(x/40)));
+        const row=Math.max(0,Math.min(a.painterRows-1,Math.floor(y/40)));
+        a.painterTerritory[`${col}:${row}`]=socketId;
+      }
+      const playerCol=Math.max(0,Math.min(a.painterCols-1,Math.floor(pos.x/40)));
+      const playerRow=Math.max(0,Math.min(a.painterRows-1,Math.floor(pos.y/40)));
+      const bucketIndex=a.painterBuckets.findIndex((bucket)=>bucket.col===playerCol&&bucket.row===playerRow);
+      if(bucketIndex>=0){
+        const bucket=a.painterBuckets.splice(bucketIndex,1)[0],cells=[];
+        const add=(dc,dr)=>{
+          const col=bucket.col+dc,row=bucket.row+dr;
+          if(col<0||col>=a.painterCols||row<0||row>=a.painterRows)return;
+          a.painterTerritory[`${col}:${row}`]=socketId;cells.push(`${col}:${row}`);
+        };
+        if(bucket.type==="speed")pos.painterSpeedUntil=now+3500;
+        else if(bucket.type==="lightning"){
+          for(const [otherId,otherPos] of Object.entries(a.positions))if(otherId!==socketId)otherPos.painterStunnedUntil=now+2000;
+        }
+        else if(bucket.type==="roller"){
+          if(bucket.orientation==="vertical")for(let row=0;row<a.painterRows;row++){a.painterTerritory[`${bucket.col}:${row}`]=socketId;cells.push(`${bucket.col}:${row}`);}
+          else for(let col=0;col<a.painterCols;col++){a.painterTerritory[`${col}:${bucket.row}`]=socketId;cells.push(`${col}:${bucket.row}`);}
+        }
+        else if(bucket.type==="cross")for(let n=-2;n<=2;n++){add(n,0);add(0,n);}
+        else if(bucket.type==="splash")for(let dr=-1;dr<=1;dr++)for(let dc=-1;dc<=1;dc++)add(dc,dr);
+        else for(let dr=-2;dr<=2;dr++)for(let dc=-2;dc<=2;dc++)if(Math.abs(dc)+Math.abs(dr)<=3)add(dc,dr);
+        this.emitRoom(room.code,"arena:painter-bucket",{playerId:socketId,type:bucket.type,cells,buckets:a.painterBuckets});
+        this.emitRoom(room.code,"arena:painter-buckets",{buckets:a.painterBuckets});
+      }
+      this.emitRoom(room.code,"arena:painter",{territory:a.painterTerritory,trails:a.painterTrails,players:this.arenaPublic(room).players});
     }
     pos.vx = Math.max(-350, Math.min(350, (pos.x - oldX) / movementDt));
     pos.vy = Math.max(-350, Math.min(350, (pos.y - oldY) / movementDt));
@@ -1951,6 +2194,12 @@ class GameManager {
     return { ok: true };
   }
 
+  resetPainterPlayer(arena,playerId){
+    arena.painterTrails[playerId]=[];
+    const spawn=arena.painterSpawns[playerId],pos=arena.positions[playerId];
+    if(spawn&&pos){pos.x=spawn.x;pos.y=spawn.y;pos.vx=0;pos.vy=0;}
+  }
+
   arenaJump(room, socketId) {
     if (!room || !room.arena || room.state !== GAME_STATES.QUESTION) {
       return { ok: false, error: "Not in a survival arena right now." };
@@ -1963,6 +2212,12 @@ class GameManager {
       this.emitRoom(room.code,"arena:flap",{playerId:socketId,vy:pos.vy});
       return {ok:true};
     }
+    if(room.arena.mode==="runner"){
+      if(now<(pos.jumpCooldownUntil||0)||pos.y<324)return {ok:true};
+      pos.vy=-420;pos.grounded=false;pos.jumpCooldownUntil=now+180;
+      this.emitRoom(room.code,"arena:jumped",{playerId:socketId,jumpingUntil:now+650});
+      return {ok:true};
+    }
     if (now < (pos.jumpCooldownUntil || 0)) return { ok: true };
     pos.jumpUntil = now + 620;
     pos.jumpCooldownUntil = now + 1050;
@@ -1973,6 +2228,17 @@ class GameManager {
   finishArenaRound(room) {
     this.disarmTimer(room);
     const a = room.arena, duration = a.deadline - a.startedAt;
+    if(a.mode==="painter"){
+      const total=a.painterCols*a.painterRows;
+      const ranking=this.roomManager.connectedPlayers(room).map((p)=>{
+        const cells=Object.values(a.painterTerritory).filter((id)=>id===p.id).length;
+        return {playerId:p.id,name:p.name,avatar:p.avatar,cells,percent:Math.round(cells/total*1000)/10};
+      }).sort((x,y)=>y.cells-x.cells);
+      ranking.forEach((entry,index)=>{entry.pointsAwarded=[100,60,30,10][index]||10;room.players[entry.playerId].score+=entry.pointsAwarded;entry.totalScore=room.players[entry.playerId].score;});
+      room.state=GAME_STATES.RESULTS;room.deadline=null;
+      const payload={mode:a.mode,ranking,roundNumber:room.roundIndex+1,totalRounds:room.totalRounds,isFinalRound:room.roundIndex+1>=room.totalRounds};
+      room.lastResults=payload;this.emitRoom(room.code,"round:results",payload);return;
+    }
     if(a.mode==="racing"){
       const checkpointCount=(RACE_TRACKS.find((track)=>track.id===a.trackId)||RACE_TRACKS[0]).checkpoints.length;
       const ranking=this.roomManager.connectedPlayers(room).map((p)=>{
@@ -1994,7 +2260,7 @@ class GameManager {
     const ranking = this.roomManager.connectedPlayers(room).map((p) => {
       const out = a.eliminated[p.id];
       const survived = !out;
-      const timeMs = a.mode==="flappy"
+      const timeMs = ["flappy","runner"].includes(a.mode)
         ? (out?.timeMs ?? Math.min(duration,Date.now()-a.startedAt))
         : (survived ? duration : out.timeMs);
       const pointsAwarded = survived ? 100 : Math.max(10, Math.round(60 * timeMs / duration));
@@ -2002,7 +2268,7 @@ class GameManager {
       return {
         playerId: p.id, name: p.name, avatar: p.avatar, survived, timeMs,
         reason: out?.reason, pointsAwarded, totalScore: p.score,
-        distance:a.mode==="flappy"?Math.floor((a.positions[p.id]?.distance||0)/10):undefined
+        distance:["flappy","runner"].includes(a.mode)?Math.floor((a.positions[p.id]?.distance||0)/10):undefined
       };
     }).sort((x, y) => Number(y.survived) - Number(x.survived) || y.timeMs - x.timeMs);
     room.state = GAME_STATES.RESULTS;
@@ -2868,6 +3134,7 @@ class GameManager {
             activePlayerId: room.turnOrder[room.turnIndex],
             order: this.curlingOrderView(room),
             shots: this.curlingShots(room),
+            stones:room.curlingStones,
             deadline: room.deadline
           }
         };
@@ -2990,7 +3257,7 @@ class GameManager {
           }
         };
       }
-      if (["colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "pong"].includes(mode) && room.arena) {
+      if (["colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "runner", "painter", "pong"].includes(mode) && room.arena) {
         return { ...base, arena: this.arenaPublic(room) };
       }
       if (mode === "doors" && room.doors) {

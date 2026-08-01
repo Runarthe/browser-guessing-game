@@ -31,6 +31,7 @@ function playCurrentMode(gm, room, rm) {
     } else if (mode === "curling") {
       const id = room.turnOrder[room.turnIndex];
       if (!id) break;
+      room.curlingPlaybackUntil=0;
       gm.submitGuess(room, id, 100 + guard);
     } else if (mode === "timeline") {
       const id = room.turnOrder[room.turnIndex % room.turnOrder.length];

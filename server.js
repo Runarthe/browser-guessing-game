@@ -133,12 +133,23 @@ function startTestBots(room) {
           x:pos.x+Math.sign(targetX-pos.x)*Math.min(10,Math.abs(targetX-pos.x)),
           y:pos.y-7
         });
-      } else if (["colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "pong"].includes(mode) &&
+      } else if (["colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "runner", "painter", "pong"].includes(mode) &&
                  !current.arena?.eliminated[bot.id]) {
         const pos = current.arena?.positions[bot.id];
         if (pos) {
           if(mode==="flappy"){
             if(pos.y>235||(pos.vy||0)>150&&Math.random()<.35)gameManager.arenaJump(current,bot.id);
+            continue;
+          }
+          if(mode==="runner"){
+            const next=current.arena.obstacles.find((item)=>item.x-(pos.distance||0)>135);
+            const gap=next?next.x-(pos.distance||0)-135:999;
+            if(next?.type==="hanging"){
+              gameManager.arenaPosition(current,bot.id,{x:0,y:0,roll:gap<75});
+            }else{
+              gameManager.arenaPosition(current,bot.id,{x:0,y:0,roll:false});
+              if(gap<68&&pos.y>=324)gameManager.arenaJump(current,bot.id);
+            }
             continue;
           }
           if(mode==="pong"){

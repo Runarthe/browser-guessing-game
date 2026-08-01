@@ -68,24 +68,45 @@ test("curling: only the active player may shoot; results rank by closeness", () 
 
   gm.startGame(room, "s1");
   assert.equal(room.state, GAME_STATES.QUESTION);
-  const ans = room.currentQuestion.answer;
-
   const firstShooter = room.turnOrder[0];
   const other = room.turnOrder[1];
   // A non-active player cannot shoot.
-  assert.equal(gm.submitGuess(room, other, ans).ok, false);
+  assert.equal(gm.submitGuess(room, other, {direction:0,power:.5}).ok, false);
   // The active player shoots, then the turn advances.
-  assert.equal(gm.submitGuess(room, firstShooter, ans + 1000).ok, true);
+  assert.equal(gm.submitGuess(room, firstShooter, {direction:0,power:1}).ok, true);
   assert.equal(room.turnOrder[room.turnIndex], other);
 
-  // Everyone shoots; the closest wins.
-  gm.submitGuess(room, room.turnOrder[room.turnIndex], ans + 3); // very close
-  gm.submitGuess(room, room.turnOrder[room.turnIndex], ans - 900);
+  // Everyone gets three stones. Tests skip the real-time viewing delay.
+  while(room.state===GAME_STATES.QUESTION){
+    room.curlingPlaybackUntil=0;
+    gm.submitGuess(room,room.turnOrder[room.turnIndex],{direction:0,power:.58});
+  }
 
   assert.equal(room.state, GAME_STATES.RESULTS);
   const res = last("round:results").payload;
   assert.equal(res.ranking[0].pointsAwarded, 100);
-  assert.ok(res.ranking[0].distance <= res.ranking[1].distance);
+  assert.ok(res.ranking[0].score >= res.ranking[1].score);
+});
+
+test("curling: stones collide on ice and can slide off an open edge", () => {
+  const { rm, gm } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  rm.joinRoom("s3", room.code, "Erik");
+  room.settings.mode="curling";room.settings.rounds=1;
+  gm.startGame(room,"s1");
+  const first=room.turnOrder[0],second=room.turnOrder[1],third=room.turnOrder[2];
+  gm.submitGuess(room,first,{direction:0,power:.55});
+  const before={...room.curlingStones.find((s)=>s.stoneId===`${first}:1`)};
+  room.curlingPlaybackUntil=0;
+  gm.submitGuess(room,second,{direction:0,power:.55});
+  const after=room.curlingStones.find((s)=>s.stoneId===`${first}:1`);
+  assert.ok(Math.hypot(after.x-before.x,after.y-before.y)>1,"the second stone should transfer momentum to the first");
+  while(room.state===GAME_STATES.QUESTION){
+    room.curlingPlaybackUntil=0;
+    const id=room.turnOrder[room.turnIndex];gm.submitGuess(room,id,{direction:id===third?1:0,power:id===third?1:.5});
+  }
+  assert.equal(room.lastResults.ranking.find((p)=>p.playerId===third).stones.length,3);
 });
 
 test("bomb: whoever crosses the hidden threshold pops and scores zero", () => {
@@ -483,17 +504,82 @@ test("tab hopper: flaps are authoritative and pop-up collisions record distance"
   room.settings.mode = "flappy";
   gm.startGame(room, "s1");
   assert.equal(last("arena:start").payload.mode, "flappy");
-  assert.equal(last("arena:start").payload.obstacles.length, 28);
+  assert.equal(last("arena:start").payload.obstacles.length, 40);
   gm.arenaJump(room, "s1");
   assert.equal(room.arena.positions.s1.vy, -285);
   const progress=(Date.now()-room.arena.startedAt)*.12;
   room.arena.obstacles=[{x:150+progress,gapY:250,gap:90}];
   Object.assign(room.arena.positions.s1,{y:100,vy:0});
+  Object.assign(room.arena.positions.s2,{y:250,vy:0});
   room.arena.physicsAt=Date.now()-55;
   gm.tickArena(room);
   assert.ok(room.arena.eliminated.s1,"hitting a pop-up should eliminate the tab");
+  assert.equal(room.state,"question","the final surviving tab keeps flying");
+  Object.assign(room.arena.positions.s2,{y:100,vy:0});
+  room.arena.physicsAt=Date.now()-55;
+  gm.tickArena(room);
   assert.equal(last("round:results").payload.mode,"flappy");
   assert.ok(Number.isFinite(last("round:results").payload.ranking.find((p)=>p.playerId==="s1").distance));
+});
+
+test("wild run: players get identical private lanes, jump hazards, and rank by distance", () => {
+  const { rm, gm, last } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  room.settings.mode = "runner";
+  gm.startGame(room, "s1");
+  const start=last("arena:start").payload;
+  assert.equal(start.mode,"runner");
+  assert.equal(start.obstacles.length,48);
+  assert.ok(start.runnerCoins.length>50);
+  assert.ok(["moonwood","sunset","crystal","storm"].includes(start.runnerTheme));
+  assert.equal(room.arena.positions.s1.y,326);
+  assert.equal(room.arena.positions.s2.y,326);
+  gm.arenaJump(room,"s1");
+  assert.equal(room.arena.positions.s1.vy,-420);
+  const elapsed=Date.now()-room.arena.startedAt;
+  const speed=Math.min(.24,.105+elapsed/360000),progress=elapsed*speed;
+  room.arena.obstacles=[{x:135+progress,w:30,h:55,type:"stump"}];
+  Object.assign(room.arena.positions.s1,{y:240,vy:-100});
+  Object.assign(room.arena.positions.s2,{y:326,vy:0});
+  room.arena.physicsAt=Date.now()-55;
+  gm.tickArena(room);
+  assert.equal(room.arena.eliminated.s1,undefined,"an airborne runner clears the same hazard");
+  assert.ok(room.arena.eliminated.s2,"a grounded runner hits it");
+  assert.equal(room.state,"question","the best runner continues until they crash");
+});
+
+test("territory painter: every stepped tile changes to the latest player's color", () => {
+  const { rm, gm, last } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  room.settings.mode="painter";gm.startGame(room,"s1");
+  assert.equal(last("arena:start").payload.mode,"painter");
+  room.arena.positions.s1.updatedAt=0;gm.arenaPosition(room,"s1",{x:180,y:100});
+  assert.equal(room.arena.painterTerritory["4:2"],"s1");
+  room.arena.positions.s2.updatedAt=0;gm.arenaPosition(room,"s2",{x:180,y:100});
+  assert.equal(room.arena.painterTerritory["4:2"],"s2","rivals can repaint an occupied tile");
+  assert.ok(last("arena:painter"));
+  assert.equal(room.arena.deadline-room.arena.startedAt,42000);
+  room.arena.painterBuckets=[{id:1,col:5,row:2,type:"cross",expiresAt:Date.now()+5000}];
+  room.arena.positions.s1.updatedAt=0;gm.arenaPosition(room,"s1",{x:220,y:100});
+  assert.equal(room.arena.painterTerritory["5:0"],"s1","cross buckets splash beyond the stepped tile");
+  room.arena.painterBuckets=[{id:2,col:6,row:2,type:"speed",expiresAt:Date.now()+5000}];
+  room.arena.positions.s1.updatedAt=0;gm.arenaPosition(room,"s1",{x:260,y:100});
+  assert.ok(room.arena.positions.s1.painterSpeedUntil>Date.now()+3000,"speed buckets grant a short boost");
+  room.arena.painterBuckets=[{id:3,col:7,row:3,type:"roller",expiresAt:Date.now()+5000}];
+  room.arena.positions.s1.updatedAt=0;gm.arenaPosition(room,"s1",{x:300,y:140});
+  assert.equal(Object.keys(room.arena.painterTerritory).filter((key)=>key.endsWith(":3")&&room.arena.painterTerritory[key]==="s1").length,18,"roller paints the complete row");
+  room.arena.painterBuckets=[{id:4,col:8,row:4,type:"roller",orientation:"vertical",expiresAt:Date.now()+5000}];
+  room.arena.positions.s1.updatedAt=0;gm.arenaPosition(room,"s1",{x:340,y:180});
+  assert.equal(Object.keys(room.arena.painterTerritory).filter((key)=>key.startsWith("8:")&&room.arena.painterTerritory[key]==="s1").length,11,"vertical roller paints the complete column");
+  room.arena.painterBuckets=[{id:5,col:9,row:4,type:"lightning",expiresAt:Date.now()+5000}];
+  room.arena.positions.s1.updatedAt=0;gm.arenaPosition(room,"s1",{x:380,y:180});
+  assert.ok(room.arena.positions.s2.painterStunnedUntil>Date.now()+1500,"lightning stuns every opponent");
+  assert.equal(room.arena.positions.s1.painterStunnedUntil||0,0,"the collector is immune to their own lightning");
+  const frozen={x:room.arena.positions.s2.x,y:room.arena.positions.s2.y};
+  room.arena.positions.s2.updatedAt=0;gm.arenaPosition(room,"s2",{x:300,y:300});
+  assert.deepEqual({x:room.arena.positions.s2.x,y:room.arena.positions.s2.y},frozen,"stunned players cannot move");
 });
 
 test("polygon pong: paddles move, misses cost three lives, and multiball grows", () => {
@@ -519,6 +605,21 @@ test("polygon pong: paddles move, misses cost three lives, and multiball grows",
   gm.tickArena(room);
   assert.equal(room.arena.balls.length,2);
   assert.equal(last("arena:pong-ball").payload.count,2);
+});
+
+test("polygon pong: corner strikes resolve against a side instead of escaping", () => {
+  const { rm, gm } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  room.settings.mode = "pong";
+  gm.startGame(room, "s1");
+  Object.assign(room.arena.balls[0],{x:540,y:40,vx:150,vy:-150});
+  for(let i=0;i<4;i++){room.arena.physicsAt=Date.now()-55;gm.tickArena(room);}
+  const ball=room.arena.balls[0],apothem=174;
+  const outside=Math.max(
+    (ball.x-360),(360-ball.x),(ball.y-220),(220-ball.y)
+  );
+  assert.ok(outside<apothem+16,"a corner ball must be reflected or charged as a miss");
 });
 
 test("choose a door: safe, damage, scramble, and elimination resolve server-side", () => {
