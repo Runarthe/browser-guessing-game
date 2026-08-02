@@ -192,7 +192,7 @@ class GameManager {
     room.arcade = settings.arcade && playlist.length > 1
       ? { playlist, legIndex: -1, battle: true, target: settings.battleTarget ?? 5,
           wins: {}, spinnerIndex: 0, spinnerId: connected[0].id, awaitingSpin: true,
-          pendingMode: null, previousMode: null, scoresAtLegStart: {} }
+          pendingMode: null, previousMode: null, modeHistory: [], scoresAtLegStart: {} }
       : null;
     room.currentMode = room.arcade ? null : playlist[0];
     // Curling is a compact best-of-two-set match. Each set still gives every
@@ -231,20 +231,35 @@ class GameManager {
     if (!battle || !connected.length) return;
     battle.spinnerIndex %= connected.length;
     battle.spinnerId = connected[battle.spinnerIndex].id;
-    battle.awaitingSpin = true;
+    battle.ceremonyPending = !extra.first && !!extra.lastWinners?.length;
+    battle.awaitingSpin = !battle.ceremonyPending;
     battle.pendingMode = null;
     room.state = GAME_STATES.INTERMISSION;
     room.deadline = null;
-    const payload = { battle: true, awaitingSpin: true, first: !!extra.first,
+    const payload = { battle: true, awaitingSpin: battle.awaitingSpin, ceremonyPending:battle.ceremonyPending, first: !!extra.first,
       spinnerId: battle.spinnerId, spinnerName: room.players[battle.spinnerId]?.name,
       options: battle.playlist, target: battle.target, wins: battle.wins,
       standings: this.battleStandings(room), lastWinners: extra.lastWinners ?? [] };
     room.lastIntermission = payload;
     this.emitRoom(room.code, "arcade:intermission", payload);
-    if (room.players[battle.spinnerId]?.isBot) {
+    if (battle.awaitingSpin && room.players[battle.spinnerId]?.isBot) {
       const botWheelTimer = this.setTimer(() => this.spinBattleWheel(room, battle.spinnerId), 1200);
       this.timers.set(room.code, botWheelTimer);
     }
+  }
+
+  proceedBattleCeremony(room,socketId){
+    const battle=room?.arcade;
+    if(!room||room.state!==GAME_STATES.INTERMISSION||!battle?.battle||!battle.ceremonyPending)
+      return {ok:false,error:"There is no star ceremony to continue."};
+    if(socketId!==room.hostId)return {ok:false,error:"Only the host can continue to the wheel."};
+    battle.ceremonyPending=false;battle.awaitingSpin=true;
+    if(room.lastIntermission){room.lastIntermission.ceremonyPending=false;room.lastIntermission.awaitingSpin=true;}
+    this.emitRoom(room.code,"battle:ceremony-ended",{spinnerId:battle.spinnerId,spinnerName:room.players[battle.spinnerId]?.name});
+    if(room.players[battle.spinnerId]?.isBot){
+      const timer=this.setTimer(()=>this.spinBattleWheel(room,battle.spinnerId),1200);this.timers.set(room.code,timer);
+    }
+    return {ok:true};
   }
 
   spinBattleWheel(room, socketId) {
@@ -253,25 +268,47 @@ class GameManager {
       return { ok: false, error: "The wheel is not ready to spin." };
     }
     if (socketId !== battle.spinnerId) return { ok: false, error: "It is another player's turn to spin." };
-    let choices = battle.playlist.filter((m) => m !== battle.previousMode);
-    if (!choices.length) choices = battle.playlist.slice();
-    const selectedMode = choices[Math.floor(Math.random() * choices.length)];
+    const weighted=this.battleModeWeights(battle);
+    const totalWeight=weighted.reduce((sum,item)=>sum+item.weight,0);
+    let roll=Math.random()*totalWeight,selectedMode=weighted.at(-1)?.mode;
+    for(const item of weighted){roll-=item.weight;if(roll<=0){selectedMode=item.mode;break;}}
     battle.awaitingSpin = false;
     battle.pendingMode = selectedMode;
+    battle.modeHistory.push(selectedMode);
+    if(battle.modeHistory.length>8)battle.modeHistory.shift();
     this.emitRoom(room.code, "battle:wheel-result", { selectedMode, options: battle.playlist, spinnerId: socketId });
     this.disarmTimer(room);
     const wheelTimer = this.setTimer(() => {
       if (room.state !== GAME_STATES.INTERMISSION || battle.pendingMode !== selectedMode) return;
-      battle.legIndex += 1;
-      battle.previousMode = selectedMode;
-      battle.pendingMode = null;
-      room.currentMode = selectedMode;
-      battle.scoresAtLegStart = Object.fromEntries(Object.values(room.players).map((p) => [p.id, p.score ?? 0]));
-      this.emitRoom(room.code, "battle:started", { legIndex: battle.legIndex, mode: selectedMode });
-      this.beginMode(room);
+      const startsAt=Date.now()+3000;
+      this.emitRoom(room.code,"battle:countdown",{mode:selectedMode,startsAt,seconds:3});
+      const countdownTimer=this.setTimer(()=>{
+        if(room.state!==GAME_STATES.INTERMISSION||battle.pendingMode!==selectedMode)return;
+        battle.legIndex += 1;
+        battle.previousMode = selectedMode;
+        battle.pendingMode = null;
+        room.currentMode = selectedMode;
+        battle.scoresAtLegStart = Object.fromEntries(Object.values(room.players).map((p) => [p.id, p.score ?? 0]));
+        this.emitRoom(room.code, "battle:started", { legIndex: battle.legIndex, mode: selectedMode });
+        this.beginMode(room);
+      },3000);
+      this.timers.set(room.code,countdownTimer);
     }, 3400);
     this.timers.set(room.code, wheelTimer);
     return { ok: true, selectedMode };
+  }
+
+  battleModeWeights(battle){
+    const playlist=[...new Set(battle?.playlist||[])],history=battle?.modeHistory||[];
+    if(playlist.length<=1)return playlist.map((mode)=>({mode,weight:1}));
+    return playlist.map((mode)=>{
+      const reverseAge=[...history].reverse().findIndex((played)=>played===mode);
+      // No immediate repeat. Recent games then recover from 12% -> 35% ->
+      // 65% before returning to their normal wheel probability.
+      const weight=reverseAge < 0 ? 1 : reverseAge === 0 ? 0 :
+        reverseAge === 1 ? .12 : reverseAge === 2 ? .35 : reverseAge === 3 ? .65 : 1;
+      return {mode,weight};
+    });
   }
 
   /**
@@ -555,7 +592,7 @@ class GameManager {
   beginCurlingRound(room) {
     const question = {
       id:`curling-shot-${room.roundIndex}`,
-      text:"Land three stones in the marked scoring zones. The thin back strip is worth the most!",
+      text:"Slide your stones into the scoring zones.",
       unit:"power",category:"Skill shot",answer:724
     };
     room.currentQuestion = question;
@@ -1696,7 +1733,8 @@ class GameManager {
       balls:mode==="pong"?[{id:1,x:360,y:220,vx:175,vy:115}]:[],
       lives:{},playerSides:{},pongSides:mode==="pong"?(players.length===2?4:Math.max(3,players.length)):0,
       nextBallAt:mode==="pong"?now+9000:0,
-      trackId: mode==="racing"?RACE_TRACKS[room.roundIndex%RACE_TRACKS.length].id:null
+      trackId: mode==="racing"?RACE_TRACKS[room.roundIndex%RACE_TRACKS.length].id:null,
+      fireShrinkLevel:0,fireNextShrinkAt:mode==="fire"?now+38000:0
     };
     if (mode === "fire") {
       const safe = new Set(["1:1","1:2","2:1","11:7","11:6","10:7","11:1","11:2","10:1","1:7","1:6","2:7"]);
@@ -1765,10 +1803,10 @@ class GameManager {
     const a = room.arena;
     return {
       mode: a.mode, instanceId:a.instanceId, roundNumber: room.roundIndex + 1, totalRounds: room.totalRounds,
-      deadline: a.deadline, startedAt: a.startedAt, safeColor: a.safeColor, mapId: a.mapId,
+      deadline: a.deadline, startedAt: a.startedAt, serverNow:Date.now(), safeColor: a.safeColor, mapId: a.mapId,
       cycle: a.cycle, holderId: a.holderId, tileLayout: a.tileLayout,
       dangerAt: a.colorDangerAt, scrambleUntil: a.colorScrambleUntil,
-      bombs: a.bombs, blasts: a.blasts, crates: a.crates, powerups:a.powerups,
+      bombs: a.bombs, blasts: a.blasts, crates: a.crates, powerups:a.powerups,fireShrinkLevel:a.fireShrinkLevel||0,
       trackId:a.trackId,obstacles:a.obstacles,runnerCoins:a.runnerCoins,runnerPlatforms:a.runnerPlatforms,
       runnerTheme:a.runnerTheme,runnerSeed:a.runnerSeed,
       painterCols:a.painterCols,painterRows:a.painterRows,painterTerritory:a.painterTerritory,painterTrails:a.painterTrails,
@@ -1939,11 +1977,11 @@ class GameManager {
         let hit=pos.y<18||pos.y>422;
         if(!hit)for(const obstacle of a.obstacles){
           const screenX=obstacle.x-progress;
-          if(Math.abs(screenX-150)<35&&(pos.y-12<obstacle.gapY-obstacle.gap/2||pos.y+12>obstacle.gapY+obstacle.gap/2)){hit=true;break;}
+          if(Math.abs(screenX-150)<29&&(pos.y-10<obstacle.gapY-obstacle.gap/2||pos.y+10>obstacle.gapY+obstacle.gap/2)){hit=true;break;}
         }
         if(hit)this.eliminateArena(room,p.id,"popup");
       }
-      this.emitRoom(room.code,"arena:positions",{players:this.arenaPublic(room).players});
+      this.emitRoom(room.code,"arena:positions",{players:this.arenaPublic(room).players,serverNow:now});
     } else if(a.mode==="runner"){
       const dt=Math.min(.08,(now-(a.physicsAt||now))/1000);a.physicsAt=now;
       for(const p of alive()){
@@ -1988,6 +2026,18 @@ class GameManager {
       const exploding=a.bombs.filter((bomb)=>now>=bomb.explodeAt);
       for(const bomb of exploding)this.explodeFireBomb(room,bomb,now);
       a.blasts=a.blasts.filter((blast)=>now<blast.until);
+      for(const p of alive()){
+        const cell=this.fireCell(a.positions[p.id].x,a.positions[p.id].y),key=`${cell.col}:${cell.row}`;
+        if(a.blasts.some((blast)=>blast.cells.includes(key)))this.eliminateArena(room,p.id,"blast");
+      }
+      if(now>=a.fireNextShrinkAt&&a.fireShrinkLevel<4){
+        a.fireShrinkLevel++;a.fireNextShrinkAt=now+5500;
+        for(const p of alive()){
+          const {col,row}=this.fireCell(a.positions[p.id].x,a.positions[p.id].y);
+          if(this.fireShrunk(a,col,row))this.eliminateArena(room,p.id,"closing-fire");
+        }
+        this.emitRoom(room.code,"arena:fire",{bombs:a.bombs,blasts:a.blasts,crates:a.crates,powerups:a.powerups,fireShrinkLevel:a.fireShrinkLevel});
+      }
     } else if (a.mode === "bombpass" && now >= a.explodeAt) {
       this.eliminateArena(room, a.holderId, "exploded");
       const remaining = alive();
@@ -2017,17 +2067,19 @@ class GameManager {
 
   fireCell(x,y){return {col:Math.max(0,Math.min(13,Math.floor((x-35)/50))),row:Math.max(0,Math.min(9,Math.floor((y-20)/45)))};}
   fireSolid(col,row,mapId="classic"){
-    if(col<=0||col>=13||row<=0||row>=9)return true;
+    if(col<=0||col>=12||row<=0||row>=8)return true;
     if(mapId==="fortress")return (col%3===0&&row%2===0)||(row===4&&col%4===0);
     if(mapId==="switchback")return (row%3===0&&col%2===0)||(col===6&&row%2===0);
     return col%2===0&&row%2===0;
   }
-  fireBlocked(a,x,y,radius=14){
+  fireShrunk(a,col,row){const n=a.fireShrinkLevel||0;return n>0&&(col<=n||col>=12-n||row<=n||row>=8-n);}
+  fireBlocked(a,x,y,radius=14,playerId=null){
     const minCol=Math.floor((x-radius-35)/50),maxCol=Math.floor((x+radius-35)/50);
     const minRow=Math.floor((y-radius-20)/45),maxRow=Math.floor((y+radius-20)/45);
     for(let row=minRow;row<=maxRow;row++)for(let col=minCol;col<=maxCol;col++){
       const key=`${col}:${row}`;
-      if(!this.fireSolid(col,row,a.mapId)&&!a.crates.includes(key))continue;
+      const bomb=a.bombs.some((b)=>b.col===col&&b.row===row&&!(b.ownerId===playerId&&!b.ownerExited));
+      if(!this.fireSolid(col,row,a.mapId)&&!this.fireShrunk(a,col,row)&&!a.crates.includes(key)&&!bomb)continue;
       const left=35+col*50,right=left+48,top=20+row*45,bottom=top+43;
       if(x+radius>left&&x-radius<right&&y+radius>top&&y-radius<bottom)return true;
     }
@@ -2039,7 +2091,7 @@ class GameManager {
     const cells=[`${bomb.col}:${bomb.row}`];
     for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]])for(let n=1;n<=(bomb.range||2);n++){
       const col=bomb.col+dx*n,row=bomb.row+dy*n,key=`${col}:${row}`;
-      if(this.fireSolid(col,row,a.mapId))break;
+      if(this.fireSolid(col,row,a.mapId)||this.fireShrunk(a,col,row))break;
       cells.push(key);
       const crate=a.crates.indexOf(key);
       if(crate>=0){
@@ -2051,7 +2103,7 @@ class GameManager {
         break;
       }
     }
-    a.blasts.push({cells,until:now+650});
+    a.blasts.push({cells,until:now+850});
     for(const [id,pos] of Object.entries(a.positions)){
       const cell=this.fireCell(pos.x,pos.y);
       if(cells.includes(`${cell.col}:${cell.row}`))this.eliminateArena(room,id,"blast");
@@ -2070,7 +2122,7 @@ class GameManager {
     if(a.bombs.filter((b)=>b.ownerId===socketId).length>=upgrades.bombs)return {ok:true};
     const pos=a.positions[socketId],cell=this.fireCell(pos.x,pos.y),key=`${cell.col}:${cell.row}`;
     if(this.fireSolid(cell.col,cell.row,a.mapId)||a.crates.includes(key)||a.bombs.some((b)=>b.col===cell.col&&b.row===cell.row))return {ok:true};
-    a.bombs.push({ownerId:socketId,col:cell.col,row:cell.row,range:upgrades.range,explodeAt:Date.now()+2200});
+    a.bombs.push({ownerId:socketId,col:cell.col,row:cell.row,range:upgrades.range,explodeAt:Date.now()+2200,ownerExited:false});
     this.emitRoom(room.code,"arena:fire",{bombs:a.bombs,blasts:a.blasts,crates:a.crates,powerups:a.powerups});
     return {ok:true};
   }
@@ -2122,8 +2174,19 @@ class GameManager {
   eliminateArena(room, playerId, reason) {
     const a = room.arena;
     if (!playerId || a.eliminated[playerId]) return;
+    if(a.mode==="fire")this.dropFirePowerups(a,playerId);
     a.eliminated[playerId] = { reason, timeMs: Date.now() - a.startedAt };
     this.emitRoom(room.code, "arena:eliminated", { playerId, reason });
+    if(a.mode==="fire")this.emitRoom(room.code,"arena:fire",{bombs:a.bombs,blasts:a.blasts,crates:a.crates,powerups:a.powerups,fireShrinkLevel:a.fireShrinkLevel||0});
+  }
+
+  dropFirePowerups(a,playerId){
+    const u=a.upgrades[playerId]||{range:2,bombs:1,speed:0},drops=[];
+    for(let i=2;i<u.range;i++)drops.push("range");for(let i=1;i<u.bombs;i++)drops.push("bombs");for(let i=0;i<u.speed;i++)drops.push("speed");
+    const c=this.fireCell(a.positions[playerId].x,a.positions[playerId].y),spots=[[0,0],[1,0],[-1,0],[0,1],[0,-1]];
+    drops.slice(0,spots.length).forEach((type,i)=>{const col=c.col+spots[i][0],row=c.row+spots[i][1],key=`${col}:${row}`;
+      if(!this.fireSolid(col,row,a.mapId)&&!this.fireShrunk(a,col,row)&&!a.crates.includes(key)&&!a.powerups.some((p)=>p.key===key))a.powerups.push({key,type});});
+    a.upgrades[playerId]={range:2,bombs:1,speed:0};
   }
 
   arenaPosition(room, socketId, raw = {}) {
@@ -2164,8 +2227,16 @@ class GameManager {
     }
     if(a.mode==="fire"){
       const nextX=pos.x,nextY=pos.y;
-      pos.x=this.fireBlocked(a,nextX,oldY)?oldX:nextX;
-      pos.y=this.fireBlocked(a,pos.x,nextY)?oldY:nextY;
+      pos.x=this.fireBlocked(a,nextX,oldY,14,socketId)?oldX:nextX;
+      pos.y=this.fireBlocked(a,pos.x,nextY,14,socketId)?oldY:nextY;
+      let bombExitChanged=false;
+      for(const bomb of a.bombs)if(bomb.ownerId===socketId&&!bomb.ownerExited){
+        const cx=35+bomb.col*50+24,cy=20+bomb.row*45+21.5;
+        // Do not turn the bomb solid until the player's entire circular body
+        // has cleared its tile. Switching on the cell boundary trapped players.
+        if(Math.abs(pos.x-cx)>38||Math.abs(pos.y-cy)>35.5){bomb.ownerExited=true;bombExitChanged=true;}
+      }
+      if(bombExitChanged)this.emitRoom(room.code,"arena:fire",{bombs:a.bombs,blasts:a.blasts,crates:a.crates,powerups:a.powerups,fireShrinkLevel:a.fireShrinkLevel||0});
       const cell=this.fireCell(pos.x,pos.y),key=`${cell.col}:${cell.row}`;
       const pickupIndex=a.powerups.findIndex((item)=>item.key===key);
       if(pickupIndex>=0){
@@ -2305,7 +2376,7 @@ class GameManager {
       }
     }
     this.emitRoom(room.code, "arena:positions", {
-      players: this.arenaPublic(room).players, holderId: a.holderId
+      players: this.arenaPublic(room).players, holderId: a.holderId, serverNow:now
     });
     return { ok: true };
   }
@@ -3101,7 +3172,7 @@ class GameManager {
     for (const s of scored) {
       room.players[s.playerId].score += s.pointsAwarded;
       room.players[s.playerId].mapDistanceKm =
-        (room.players[s.playerId].mapDistanceKm || 0) + Math.round(s.guess);
+        Math.round(((room.players[s.playerId].mapDistanceKm || 0) + s.guess)*10)/10;
     }
 
     const ranking = scored.map((s) => {
@@ -3111,7 +3182,7 @@ class GameManager {
         name: s.name,
         avatar: d.avatar,
         guess: d.guess,
-        distanceKm: Math.round(d.distanceKm),
+        distanceKm: Math.round(d.distanceKm*10)/10,
         withinTarget: d.distanceKm === 0,
         cumulativeDistanceKm: room.players[s.playerId].mapDistanceKm,
         pointsAwarded: s.pointsAwarded,

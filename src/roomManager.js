@@ -30,11 +30,11 @@ const ROOM_TTL_MS = 60 * 60 * 1000; // ~1 hour
 
 // Available game modes and settings bounds.
 const GAME_MODES = ["trivia", "timeline", "curling", "bomb", "map", "platformer", "drawing", "pushy", "redlight", "hidebomb", "colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "runner", "painter", "pong", "doors"];
-const ALLOWED_ROUNDS = [3, 5, 7, 10];
-const ALLOWED_SECONDS = [20, 30, 45, 60, 90];
+const ALLOWED_ROUNDS = Array.from({length:15},(_,i)=>i+1);
+const ALLOWED_SECONDS = Array.from({length:23},(_,i)=>10+i*5);
 // Hitster (timeline) target: first player to this many cards wins.
-const ALLOWED_TARGETS = [5, 7, 10, 11, 15];
-const ALLOWED_BATTLE_TARGETS = [3, 5, 7, 10];
+const ALLOWED_TARGETS = Array.from({length:20},(_,i)=>i+1);
+const ALLOWED_BATTLE_TARGETS = Array.from({length:15},(_,i)=>i+1);
 
 // Character creator options (validated server-side so clients can't inject junk).
 const AVATAR_EMOJIS = ["🦊", "🐼", "🐸", "🐙", "🦉", "🐝", "🦄", "🐲", "🐳", "🦁", "🐧", "🦖", "🐢", "🐬", "🦇", "🐰"];

@@ -29,6 +29,14 @@ test("host can update valid settings; invalid values are ignored", () => {
   assert.equal(room.settings.roundSeconds, 60);
 });
 
+test("numeric sliders accept one round/win and enforce a ten-second minimum",()=>{
+  const rm=new RoomManager();const {room}=rm.createRoom("s1","Runar");
+  rm.updateSettings(room,"s1",{rounds:1,roundSeconds:10,battleTarget:1,target:1});
+  assert.equal(room.settings.rounds,1);assert.equal(room.settings.roundSeconds,10);
+  assert.equal(room.settings.battleTarget,1);assert.equal(room.settings.target,1);
+  rm.updateSettings(room,"s1",{roundSeconds:5});assert.equal(room.settings.roundSeconds,10);
+});
+
 test("non-host cannot update settings", () => {
   const rm = new RoomManager();
   const { room } = rm.createRoom("s1", "Runar");

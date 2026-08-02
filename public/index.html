@@ -7,10 +7,20 @@
   <title>Mini Mayhem</title>
   <link rel="stylesheet" href="styles.css?v=20260802-24" />
 </head>
-<body>
+  <body>
+    <div id="game-countdown" class="game-countdown hidden" aria-live="assertive">
+      <small id="game-countdown-name">GET READY</small><strong id="game-countdown-value">3</strong>
+    </div>
+    <div id="spin-announcement" class="spin-announcement hidden" aria-live="assertive">
+      <span>🎡</span><strong id="spin-announcement-text"></strong>
+    </div>
   <div id="banner" class="banner hidden" role="status"></div>
   <button id="leave-top-btn" class="leave-top-btn hidden" title="Leave the room">⨉ Leave</button>
   <button id="sound-btn" class="sound-btn" aria-label="Mute sound" title="Sound on/off">🔊</button>
+  <div class="music-control" title="Music volume">
+    <button id="music-btn" aria-label="Mute music">🎵</button>
+    <input id="music-volume" type="range" min="0" max="100" step="1" value="10" aria-label="Music volume" />
+  </div>
 
   <!-- Reusable confirmation dialog -->
   <div id="modal-overlay" class="modal-overlay hidden" role="dialog" aria-modal="true">
@@ -446,6 +456,7 @@
         </div>
 
         <div id="results-timeline" class="timeline-viz hidden"></div>
+        <div id="round-award" class="round-award hidden"></div>
 
         <div class="map-wrap hidden" id="results-map-wrap">
           <svg id="results-map-svg" viewBox="0 0 1000 500" preserveAspectRatio="xMidYMid meet">
@@ -470,6 +481,15 @@
     <!-- ===================== INTERMISSION (arcade) ===================== -->
     <section class="screen hidden" id="screen-intermission">
       <div class="card center-card">
+        <div id="star-ceremony" class="star-ceremony hidden" aria-live="assertive">
+          <div class="star-burst">★</div>
+          <p>MINIGAME WINNER</p>
+          <div id="star-winner-avatar" class="star-winner-avatar"></div>
+          <h2 id="star-winner-name"></h2>
+          <strong>+1 BATTLE STAR</strong>
+          <button id="star-proceed-btn" class="btn btn-primary btn-block hidden">Proceed to wheel</button>
+          <small id="star-proceed-wait" class="muted hidden">Waiting for the host…</small>
+        </div>
         <p class="final-kicker" id="inter-kicker">GAME COMPLETE</p>
         <h2 class="announce" id="inter-next">Up next…</h2>
         <p class="muted small" id="inter-progress"></p>
@@ -489,6 +509,12 @@
     <section class="screen hidden" id="screen-final">
       <div class="card center-card">
         <div class="confetti" id="confetti" aria-hidden="true"></div>
+        <div id="battle-champion-hero" class="battle-champion-hero hidden" aria-live="assertive">
+          <div class="champion-rays"></div><div class="champion-crown">👑</div>
+          <div id="champion-avatar" class="champion-avatar"></div>
+          <p>ULTIMATE MINI MAYHEM CHAMPION</p><h1 id="champion-name"></h1>
+          <div id="champion-fireworks" class="champion-fireworks"></div>
+        </div>
         <p class="final-kicker" id="final-kicker">FINAL RESULTS</p>
         <h2 class="announce" id="final-announce">…</h2>
 
@@ -513,6 +539,6 @@
   <script src="characters.js?v=20260725-15"></script>
   <script src="arena25d.js?v=20260725-15"></script>
   <script src="vanishMaps.js?v=20260727-45"></script>
-  <script src="app.js?v=20260802-100"></script>
+  <script src="app.js?v=20260802-108"></script>
 </body>
 </html>

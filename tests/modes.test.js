@@ -470,6 +470,26 @@ test("playing with fire: body collision prevents diagonal clipping and powerups 
   assert.equal(room.arena.bombs[0].range,3);
 });
 
+test("playing with fire: borders stay sealed, bombs block, and active flame remains lethal", () => {
+  const { rm, gm } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  room.settings.mode = "fire"; gm.startGame(room, "s1");
+  for(const mapId of ["classic","fortress","switchback"]){
+    for(let col=0;col<13;col++){assert.equal(gm.fireSolid(col,0,mapId),true);assert.equal(gm.fireSolid(col,8,mapId),true);}
+    for(let row=0;row<9;row++){assert.equal(gm.fireSolid(0,row,mapId),true);assert.equal(gm.fireSolid(12,row,mapId),true);}
+  }
+  room.arena.crates=[];room.arena.bombs=[{ownerId:"s1",col:3,row:3,ownerExited:true,explodeAt:Date.now()+5000}];
+  assert.equal(gm.fireBlocked(room.arena,35+3*50+24,20+3*45+22,14,"s2"),true);
+  room.arena.bombs[0].ownerExited=false;
+  assert.equal(gm.fireBlocked(room.arena,35+3*50+24,20+3*45+22,14,"s1"),false,"owner can clear a newly placed bomb");
+  room.arena.bombs[0].ownerExited=true;
+  const victim=room.arena.positions.s2;Object.assign(victim,{x:35+4*50+24,y:20+3*45+22});
+  room.arena.blasts=[{cells:["4:3"],until:Date.now()+500}];
+  gm.tickArena(room);
+  assert.equal(room.arena.eliminated.s2.reason,"blast");
+});
+
 test("pocket racers: sequential checkpoints complete three laps", () => {
   const { rm, gm, last } = harness();
   const { room } = rm.createRoom("s1", "Runar");

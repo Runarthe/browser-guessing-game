@@ -573,6 +573,13 @@ io.on("connection", (socket) => {
     else broadcastRoom(room);
   });
 
+  socket.on("battle:ceremony-proceed", () => {
+    const room = roomManager.getRoom(socket.data.roomCode);
+    const result = gameManager.proceedBattleCeremony(room, socket.id);
+    if (!result.ok) socket.emit("room:error", { message: result.error });
+    else broadcastRoom(room);
+  });
+
   socket.on("game:restart", () => {
     const room = roomManager.getRoom(socket.data.roomCode);
     const result = gameManager.restartGame(room, socket.id);

@@ -61,6 +61,18 @@ test("settings validation keeps only valid playlist modes", () => {
   assert.deepEqual(room.settings.playlist, ["bomb", "curling"]);
 });
 
+test("battle wheel sharply lowers the chance of recently played minigames", () => {
+  const { gm } = harness();
+  const battle={playlist:["fire","racing","painter","pong","pushy"],modeHistory:["pushy","pong","painter","racing"]};
+  assert.deepEqual(gm.battleModeWeights(battle),[
+    {mode:"fire",weight:1},
+    {mode:"racing",weight:0},
+    {mode:"painter",weight:.12},
+    {mode:"pong",weight:.35},
+    {mode:"pushy",weight:.65}
+  ]);
+});
+
 test("battle wheel rotates spinners and ends when a player reaches the win target", () => {
   const { rm, gm, last, flushTimer } = harness();
   const { room } = rm.createRoom("h", "Runar");
@@ -77,7 +89,7 @@ test("battle wheel rotates spinners and ends when a player reaches the win targe
   assert.equal(last("arcade:intermission").payload.spinnerId, "h");
   assert.equal(gm.spinBattleWheel(room, "a").ok, false);
   assert.equal(gm.spinBattleWheel(room, "h").ok, true);
-  flushTimer();
+  flushTimer(); flushTimer(); // wheel animation, then the shared 3-second countdown
   assert.equal(room.state, GAME_STATES.QUESTION);
 
   room.players.h.score += 100;
@@ -85,15 +97,19 @@ test("battle wheel rotates spinners and ends when a player reaches the win targe
   assert.equal(room.state, GAME_STATES.INTERMISSION);
   assert.equal(room.arcade.wins.h, 1);
   assert.equal(last("arcade:intermission").payload.spinnerId, "a");
+  assert.equal(gm.spinBattleWheel(room, "a").ok, false,"wheel stays locked during the award ceremony");
+  assert.equal(gm.proceedBattleCeremony(room,"a").ok,false,"only host may dismiss the ceremony");
+  assert.equal(gm.proceedBattleCeremony(room,"h").ok,true);
   assert.equal(gm.spinBattleWheel(room, "a").ok, true);
-  flushTimer();
+  flushTimer(); flushTimer();
   room.players.h.score += 100;
   gm.finishMode(room);
   assert.equal(room.state, GAME_STATES.INTERMISSION);
   assert.equal(room.arcade.wins.h, 2);
   assert.equal(last("arcade:intermission").payload.spinnerId, "h");
+  assert.equal(gm.proceedBattleCeremony(room,"h").ok,true);
   assert.equal(gm.spinBattleWheel(room, "h").ok, true);
-  flushTimer();
+  flushTimer(); flushTimer();
   room.players.h.score += 100;
   gm.finishMode(room);
   assert.equal(room.state, GAME_STATES.FINISHED);
