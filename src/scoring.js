@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * Pure, side-effect-free scoring logic for Closest Wins.
+ * Pure, side-effect-free scoring logic for Mini Mayhem.
  *
  * Rank-based scoring:
  *   1st closest: 100 points

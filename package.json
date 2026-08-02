@@ -1,7 +1,7 @@
 {
-  "name": "closest-wins",
+  "name": "mini-mayhem",
   "version": "1.0.0",
-  "description": "Closest Wins — a browser-based multiplayer number-guessing party game.",
+  "description": "Mini Mayhem - a browser-based multiplayer minigame party.",
   "main": "server.js",
   "type": "commonjs",
   "scripts": {

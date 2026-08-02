@@ -4,8 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#0f1226" />
-  <title>Closest Wins</title>
-  <link rel="stylesheet" href="styles.css?v=20260727-21" />
+  <title>Mini Mayhem</title>
+  <link rel="stylesheet" href="styles.css?v=20260802-24" />
 </head>
 <body>
   <div id="banner" class="banner hidden" role="status"></div>
@@ -29,8 +29,8 @@
     <!-- ===================== HOME ===================== -->
     <section class="screen" id="screen-home">
       <div class="card hero">
-        <h1 class="logo">CLOSEST<span>WINS</span></h1>
-        <p class="tagline">Guess close. Score points.</p>
+        <h1 class="logo">MINI<span>MAYHEM</span></h1>
+        <p class="tagline">Spin. Compete. Claim the crown.</p>
 
         <label class="field-label" for="name-input">Your name</label>
         <input id="name-input" class="text-input" type="text" maxlength="20"
@@ -75,24 +75,40 @@
         <h3 class="section-title">Players</h3>
         <ul class="player-list" id="lobby-players"></ul>
 
+        <details class="lobby-character">
+          <summary>Change my character</summary>
+          <div class="creator lobby-creator">
+            <div class="char-preview" id="lobby-char-preview"></div>
+            <div class="creator-grids">
+              <div class="emoji-grid" id="lobby-emoji-grid"></div>
+              <div class="color-grid" id="lobby-color-grid"></div>
+            </div>
+          </div>
+          <p class="muted small" id="lobby-character-note">Each player must use a different color.</p>
+        </details>
+
         <h3 class="section-title">Game settings</h3>
         <div id="settings-panel" class="settings">
           <div class="setting">
-            <span class="setting-label">Arcade</span>
+            <span class="setting-label">Game format</span>
             <div class="seg" id="set-arcade"></div>
           </div>
-          <div class="setting hidden" id="set-mode-wrap">
-            <span class="setting-label">Mode</span>
+          <div class="setting setting-col hidden" id="set-mode-wrap">
+            <span class="setting-label">Choose a minigame</span>
             <div class="seg" id="set-mode"></div>
           </div>
           <p class="mode-desc muted small" id="mode-desc"></p>
           <div class="setting setting-col hidden" id="set-playlist-wrap">
-            <span class="setting-label">Playlist — tap to add in order</span>
+            <span class="setting-label">Minigame pool — selected games appear on the wheel</span>
             <div class="chips" id="set-playlist"></div>
             <p class="muted small" id="playlist-preview"></p>
           </div>
+          <div class="setting hidden" id="set-battle-target-wrap">
+            <span class="setting-label">First to this many minigame wins</span>
+            <div class="seg" id="set-battle-target"></div>
+          </div>
           <div class="setting">
-            <span class="setting-label">Rounds</span>
+            <span class="setting-label">Rounds per minigame</span>
             <div class="seg" id="set-rounds"></div>
           </div>
           <div class="setting">
@@ -169,7 +185,7 @@
           <p class="category-chip" id="turn-category"></p>
           <h2 class="question-text" id="turn-question">…</h2>
           <canvas id="curling-canvas" class="curling-canvas" width="500" height="680"></canvas>
-          <ul class="shot-list" id="shot-list"></ul>
+          <ul class="shot-list hidden" id="shot-list"></ul>
           <div id="curling-order" class="turn-order"></div>
           <div id="curling-input" class="hidden">
             <input id="turn-guess" type="hidden" value="0" />
@@ -283,7 +299,15 @@
         <p class="muted small center" id="drawing-clue"></p>
         <canvas id="drawing-canvas" class="drawing-canvas" width="720" height="500"></canvas>
         <div id="drawing-tools" class="drawing-tools hidden">
-          <input id="drawing-color" type="color" value="#111111" aria-label="Brush color">
+          <input id="drawing-color" type="hidden" value="#111111">
+          <div class="drawing-palette" aria-label="Brush color">
+            <button class="drawing-swatch on" data-drawing-color="#111111" style="--swatch:#111111" aria-label="Black"></button>
+            <button class="drawing-swatch" data-drawing-color="#ef4444" style="--swatch:#ef4444" aria-label="Red"></button>
+            <button class="drawing-swatch" data-drawing-color="#f59e0b" style="--swatch:#f59e0b" aria-label="Orange"></button>
+            <button class="drawing-swatch" data-drawing-color="#22c55e" style="--swatch:#22c55e" aria-label="Green"></button>
+            <button class="drawing-swatch" data-drawing-color="#3b82f6" style="--swatch:#3b82f6" aria-label="Blue"></button>
+            <button class="drawing-swatch" data-drawing-color="#a855f7" style="--swatch:#a855f7" aria-label="Purple"></button>
+          </div>
           <input id="drawing-width" type="range" min="2" max="24" value="6" aria-label="Brush width">
           <button id="drawing-clear" class="btn btn-secondary">Clear</button>
         </div>
@@ -355,6 +379,11 @@
           <p>The team is choosing their cannons.<br>Listen closely… but no peeking!</p>
         </div>
         <div id="hidebomb-board" class="hidebomb-board"></div>
+        <div id="hidebomb-controls" class="hidebomb-controls hidden">
+          <button id="hidebomb-left" class="btn btn-secondary" aria-label="Move left">◀</button>
+          <button id="hidebomb-action" class="btn btn-primary">HIDE HERE</button>
+          <button id="hidebomb-right" class="btn btn-secondary" aria-label="Move right">▶</button>
+        </div>
         <div id="hidebomb-players" class="hidebomb-players"></div>
         <p id="hidebomb-status" class="muted small center"></p>
       </div>
@@ -372,11 +401,17 @@
         <canvas id="arena-canvas" class="arena-canvas" width="720" height="440"></canvas>
         <div id="arena-painter-legend" class="painter-legend hidden"></div>
         <div class="platformer-controls" id="arena-controls">
+          <div id="arena-joystick" class="arena-joystick" aria-label="Movement joystick"><span></span></div>
+          <div id="race-mobile-pedals" class="race-mobile-pedals hidden">
+            <button class="race-pedal race-brake" data-race-pedal="down">BRAKE</button>
+            <button class="race-pedal race-gas" data-race-pedal="up">GAS</button>
+          </div>
           <button class="btn btn-secondary" data-arena="left">◀</button>
           <button class="btn btn-secondary" data-arena="up">▲</button>
           <button class="btn btn-secondary" data-arena="down">▼</button>
           <button class="btn btn-secondary" data-arena="right">▶</button>
           <button class="btn btn-primary arena-jump" id="arena-jump">JUMP</button>
+          <button class="btn btn-secondary arena-roll hidden" id="arena-roll">ROLL</button>
         </div>
         <p id="arena-status" class="muted small center"></p>
       </div>
@@ -438,6 +473,12 @@
         <p class="final-kicker" id="inter-kicker">GAME COMPLETE</p>
         <h2 class="announce" id="inter-next">Up next…</h2>
         <p class="muted small" id="inter-progress"></p>
+        <div id="battle-wheel-wrap" class="battle-wheel-wrap hidden">
+          <div class="wheel-pointer">▼</div>
+          <div id="battle-wheel" class="battle-wheel"><span id="battle-wheel-center" class="battle-wheel-center">SPIN</span></div>
+          <p id="battle-spinner-label" class="battle-spinner-label"></p>
+          <button id="battle-spin-btn" class="btn btn-primary btn-block hidden">Spin the wheel!</button>
+        </div>
         <ul class="result-list" id="inter-standings"></ul>
         <button id="inter-next-btn" class="btn btn-primary btn-block hidden">Start next game</button>
         <p class="muted small center" id="inter-host-note"></p>
@@ -472,6 +513,6 @@
   <script src="characters.js?v=20260725-15"></script>
   <script src="arena25d.js?v=20260725-15"></script>
   <script src="vanishMaps.js?v=20260727-45"></script>
-  <script src="app.js?v=20260801-86"></script>
+  <script src="app.js?v=20260802-100"></script>
 </body>
 </html>

@@ -8,15 +8,16 @@ const { GameManager } = require("../src/gameManager");
 
 function harness(minPlayers = 2) {
   const events = [];
+  const timers = new Map(); let nextTimer = 1;
   const rm = new RoomManager();
   const gm = new GameManager(rm, {
     emitRoom: (code, event, payload) => events.push({ event, payload }),
     minPlayersToStart: minPlayers,
-    setTimer: () => 0,
-    clearTimer: () => {}
+    setTimer: (fn) => { const id = nextTimer++; timers.set(id, fn); return id; },
+    clearTimer: (id) => timers.delete(id)
   });
   const last = (ev) => [...events].reverse().find((e) => e.event === ev);
-  return { events, rm, gm, last };
+  return { events, rm, gm, last, flushTimer: () => { const first = timers.entries().next().value; if(first){timers.delete(first[0]);first[1]();} } };
 }
 
 /** Play whatever mode is currently active to its conclusion (one leg). */
@@ -60,47 +61,46 @@ test("settings validation keeps only valid playlist modes", () => {
   assert.deepEqual(room.settings.playlist, ["bomb", "curling"]);
 });
 
-test("arcade plays each leg, keeps scores, and pauses on intermissions", () => {
-  const { rm, gm, last } = harness();
+test("battle wheel rotates spinners and ends when a player reaches the win target", () => {
+  const { rm, gm, last, flushTimer } = harness();
   const { room } = rm.createRoom("h", "Runar");
   rm.joinRoom("a", room.code, "Anna");
   rm.updateSettings(room, "h", {
     arcade: true,
-    playlist: ["bomb", "curling", "timeline"],
+    playlist: ["bomb", "curling"],
     rounds: 3,
-    target: 5
+    battleTarget: 3
   });
 
   assert.equal(gm.startGame(room, "h").ok, true);
-  assert.equal(room.arcade.playlist.length, 3);
-  assert.equal(gm.mode(room), "bomb");
-
-  // Leg 1 (bomb) -> intermission.
-  playCurrentMode(gm, room, rm);
   assert.equal(room.state, GAME_STATES.INTERMISSION);
-  const inter1 = last("arcade:intermission").payload;
-  assert.equal(inter1.nextMode, "curling");
-  const scoreAfterLeg1 = room.players["h"].score + room.players["a"].score;
+  assert.equal(last("arcade:intermission").payload.spinnerId, "h");
+  assert.equal(gm.spinBattleWheel(room, "a").ok, false);
+  assert.equal(gm.spinBattleWheel(room, "h").ok, true);
+  flushTimer();
+  assert.equal(room.state, GAME_STATES.QUESTION);
 
-  // Host advances -> leg 2 (curling). Non-host cannot.
-  assert.equal(gm.startNextLeg(room, "a").ok, false);
-  assert.equal(gm.startNextLeg(room, "h").ok, true);
-  assert.equal(gm.mode(room), "curling");
-  // Scores carried over (only grow).
-  assert.ok(room.players["h"].score + room.players["a"].score >= scoreAfterLeg1);
-
-  playCurrentMode(gm, room, rm);
+  room.players.h.score += 100;
+  gm.finishMode(room);
   assert.equal(room.state, GAME_STATES.INTERMISSION);
-  assert.equal(last("arcade:intermission").payload.nextMode, "timeline");
-  gm.startNextLeg(room, "h");
-  assert.equal(gm.mode(room), "timeline");
-
-  // Final leg (timeline) -> grand finish.
-  playCurrentMode(gm, room, rm);
+  assert.equal(room.arcade.wins.h, 1);
+  assert.equal(last("arcade:intermission").payload.spinnerId, "a");
+  assert.equal(gm.spinBattleWheel(room, "a").ok, true);
+  flushTimer();
+  room.players.h.score += 100;
+  gm.finishMode(room);
+  assert.equal(room.state, GAME_STATES.INTERMISSION);
+  assert.equal(room.arcade.wins.h, 2);
+  assert.equal(last("arcade:intermission").payload.spinnerId, "h");
+  assert.equal(gm.spinBattleWheel(room, "h").ok, true);
+  flushTimer();
+  room.players.h.score += 100;
+  gm.finishMode(room);
   assert.equal(room.state, GAME_STATES.FINISHED);
   const fin = last("game:finished").payload;
-  assert.equal(fin.arcade, true);
-  assert.equal(fin.standings.length, 2);
+  assert.equal(fin.battle, true);
+  assert.equal(fin.winner.playerId, "h");
+  assert.equal(fin.winner.score, 3);
 });
 
 test("non-arcade single mode still finishes directly (no intermission)", () => {

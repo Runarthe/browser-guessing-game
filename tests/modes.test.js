@@ -88,6 +88,17 @@ test("curling: only the active player may shoot; results rank by closeness", () 
   assert.ok(res.ranking[0].score >= res.ranking[1].score);
 });
 
+test("curling: standalone games use two sets while retaining three stones", () => {
+  const { rm, gm } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  room.settings.mode="curling";room.settings.rounds=5;
+  gm.startGame(room,"s1");
+  assert.equal(room.totalRounds,2);
+  assert.equal(room.turnOrder.length,6);
+  assert.ok(gm.curlingOrderView(room).every((player)=>player.stonesTotal===3));
+});
+
 test("curling: stones collide on ice and can slide off an open edge", () => {
   const { rm, gm } = harness();
   const { room } = rm.createRoom("s1", "Runar");
@@ -150,6 +161,9 @@ test("platformer: players build one tile, race, and score finishers", () => {
   gm.platformerLock(room, "s2", true);
 
   assert.equal(room.platformer.phase, "race");
+  assert.ok(Number.isFinite(room.platformer.positions.s1.x));
+  assert.ok(Number.isFinite(room.platformer.positions.s2.x));
+  assert.notEqual(room.platformer.positions.s1.x, room.platformer.positions.s2.x);
   assert.equal(room.platformer.level.tiles["6,8"], "solid");
   assert.equal(room.platformer.level.tiles["7,8"], "bouncy");
   gm.platformerOutcome(room, "s1", "goal", 4200);
@@ -472,11 +486,12 @@ test("pocket racers: sequential checkpoints complete three laps", () => {
   const pos = room.arena.positions.s1;
   assert.equal(room.arena.trackId,"square");
   const fast = room.arena.positions.s2;
-  Object.assign(fast,{x:560,y:140,updatedAt:0,checkpoint:0});
-  gm.arenaPosition(room,"s2",{x:700,y:140,angle:0});
+  Object.assign(fast,{x:640,y:200,updatedAt:Date.now()-100,checkpoint:0});
+  gm.arenaPosition(room,"s2",{x:640,y:260,angle:Math.PI/2});
   assert.equal(fast.checkpoint,1,"crossing a checkpoint between packets must still register");
-  for (let lap=0;lap<3;lap++) for (const [x,y] of [[640,140],[590,370],[80,320],[130,90]]) {
-    pos.updatedAt=0;
+  const crossings=[[[640,200],[640,260]],[[390,370],[330,370]],[[80,260],[80,200]],[[330,90],[390,90]]];
+  for (let lap=0;lap<3;lap++) for (const [[oldX,oldY],[x,y]] of crossings) {
+    Object.assign(pos,{x:oldX,y:oldY,updatedAt:Date.now()-100});
     gm.arenaPosition(room,"s1",{x,y,angle:0});
   }
   assert.equal(pos.lap,3);
@@ -497,6 +512,19 @@ test("pocket racers: sequential checkpoints complete three laps", () => {
   assert.ok(last("arena:racer-crashed"));
 });
 
+test("arena positions reject null coordinates instead of teleporting to a corner", () => {
+  const { rm, gm } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");
+  room.settings.mode="racing";room.settings.rounds=1;
+  gm.startGame(room,"s1");
+  const before={...room.arena.positions.s1};
+  const result=gm.arenaPosition(room,"s1",{x:null,y:null,angle:0});
+  assert.equal(result.ok,false);
+  assert.equal(room.arena.positions.s1.x,before.x);
+  assert.equal(room.arena.positions.s1.y,before.y);
+});
+
 test("tab hopper: flaps are authoritative and pop-up collisions record distance", () => {
   const { rm, gm, last } = harness();
   const { room } = rm.createRoom("s1", "Runar");
@@ -511,14 +539,20 @@ test("tab hopper: flaps are authoritative and pop-up collisions record distance"
   room.arena.obstacles=[{x:150+progress,gapY:250,gap:90}];
   Object.assign(room.arena.positions.s1,{y:100,vy:0});
   Object.assign(room.arena.positions.s2,{y:250,vy:0});
+  room.players.s2.connected=false; // a sleeping phone still owns its run
   room.arena.physicsAt=Date.now()-55;
   gm.tickArena(room);
   assert.ok(room.arena.eliminated.s1,"hitting a pop-up should eliminate the tab");
   assert.equal(room.state,"question","the final surviving tab keeps flying");
+  room.players.s2.connected=true;
+  room.arena.positions.s1.distance=900;
+  room.arena.positions.s2.distance=650;
   Object.assign(room.arena.positions.s2,{y:100,vy:0});
   room.arena.physicsAt=Date.now()-55;
   gm.tickArena(room);
   assert.equal(last("round:results").payload.mode,"flappy");
+  assert.equal(last("round:results").payload.ranking[0].playerId,"s1","furthest distance wins even if everybody crashes");
+  assert.equal(last("round:results").payload.ranking[0].pointsAwarded,100);
   assert.ok(Number.isFinite(last("round:results").payload.ranking.find((p)=>p.playerId==="s1").distance));
 });
 

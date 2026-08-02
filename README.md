@@ -1,4 +1,4 @@
-# Closest Wins
+# Mini Mayhem
 
 A browser-based multiplayer party game. Players join a private room with a short
 code, then compete over five rounds of numerical trivia. Each round, everyone

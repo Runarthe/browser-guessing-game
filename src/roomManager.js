@@ -3,7 +3,7 @@
 const crypto = require("crypto");
 
 /**
- * Room lifecycle and membership management for Closest Wins.
+ * Room lifecycle and membership management for Mini Mayhem.
  *
  * Rooms live entirely in server memory. This module owns room creation, code
  * generation, player membership, host identity/migration and cleanup. It does
@@ -34,6 +34,7 @@ const ALLOWED_ROUNDS = [3, 5, 7, 10];
 const ALLOWED_SECONDS = [20, 30, 45, 60, 90];
 // Hitster (timeline) target: first player to this many cards wins.
 const ALLOWED_TARGETS = [5, 7, 10, 11, 15];
+const ALLOWED_BATTLE_TARGETS = [3, 5, 7, 10];
 
 // Character creator options (validated server-side so clients can't inject junk).
 const AVATAR_EMOJIS = ["🦊", "🐼", "🐸", "🐙", "🦉", "🐝", "🦄", "🐲", "🐳", "🦁", "🐧", "🦖", "🐢", "🐬", "🦇", "🐰"];
@@ -46,9 +47,11 @@ function defaultSettings() {
     roundSeconds: 45,
     // Hitster win target (timeline mode).
     target: 11,
-    // Arcade: play a sequence of modes back-to-back, scores carrying over.
+    // Battle mode: a rotating player spins a random minigame wheel; first to
+    // the configured number of minigame wins takes the match.
     arcade: false,
-    playlist: ["trivia", "bomb", "curling", "timeline"],
+    battleTarget: 5,
+    playlist: ["curling", "platformer", "pushy", "hidebomb", "colorfloor", "vanish", "fire", "racing", "flappy", "runner", "painter", "pong"],
     // null = all trivia categories enabled. Otherwise an array of category names.
     categories: null
   };
@@ -61,6 +64,17 @@ function validateAvatar(raw) {
     emoji: AVATAR_EMOJIS.includes(a.emoji) ? a.emoji : AVATAR_EMOJIS[0],
     color: AVATAR_COLORS.includes(a.color) ? a.color : AVATAR_COLORS[1]
   };
+}
+
+/** Return a validated avatar whose colour is not already used in the room. */
+function uniqueAvatar(room, raw, playerId = null) {
+  const avatar = validateAvatar(raw);
+  const used = new Set(Object.values(room?.players || {})
+    .filter((p) => p.id !== playerId && p.connected !== false)
+    .map((p) => p.avatar?.color));
+  if (!used.has(avatar.color)) return avatar;
+  avatar.color = AVATAR_COLORS.find((color) => !used.has(color)) || avatar.color;
+  return avatar;
 }
 
 class RoomManager {
@@ -130,7 +144,7 @@ class RoomManager {
       createdAt: Date.now(),
       lastActivity: Date.now()
     };
-    room.players[socketId] = this.makePlayer(socketId, check.name, avatar);
+    room.players[socketId] = this.makePlayer(socketId, check.name, uniqueAvatar(room, avatar));
     this.rooms.set(code, room);
     return { ok: true, room };
   }
@@ -188,7 +202,9 @@ class RoomManager {
       }
       for (const bag of [room.votes, room.platformer?.placements, room.platformer?.outcomes,
         room.pushy?.outcomes, room.pushy?.positions, room.drawing?.guessed,
-        room.arena?.positions, room.arena?.eliminated, room.doors?.hearts,
+        room.arena?.positions, room.arena?.eliminated, room.arena?.finished,
+        room.arena?.upgrades, room.arena?.lives, room.arena?.playerSides,
+        room.arena?.painterSpawns, room.arena?.painterTrails, room.doors?.hearts,
         room.doors?.choices, room.doors?.eliminated, room.doors?.positions]) {
         if (bag && Object.prototype.hasOwnProperty.call(bag, oldId)) {
           bag[newSocketId] = bag[oldId];
@@ -204,6 +220,10 @@ class RoomManager {
       if (room.hidebomb?.bomberId === oldId) room.hidebomb.bomberId = newSocketId;
       if (room.arena?.holderId === oldId) room.arena.holderId = newSocketId;
       if (room.arena?.previousHolderId === oldId) room.arena.previousHolderId = newSocketId;
+      if (Array.isArray(room.arena?.finishOrder)) room.arena.finishOrder = room.arena.finishOrder.map((id) => id === oldId ? newSocketId : id);
+      if (room.arena?.painterTerritory) for (const key of Object.keys(room.arena.painterTerritory)) {
+        if (room.arena.painterTerritory[key] === oldId) room.arena.painterTerritory[key] = newSocketId;
+      }
       for (const bag of [room.hidebomb?.alive, room.hidebomb?.choices, room.hidebomb?.points]) {
         if (bag && Object.prototype.hasOwnProperty.call(bag, oldId)) {
           bag[newSocketId] = bag[oldId];
@@ -237,13 +257,27 @@ class RoomManager {
     if (this.isNameTaken(room, check.name)) {
       return { ok: false, error: "That name is already taken in this room." };
     }
-    room.players[socketId] = this.makePlayer(socketId, check.name, avatar);
+    const usedColors = new Set(this.connectedPlayers(room).map((p) => p.avatar?.color));
+    if (usedColors.size >= AVATAR_COLORS.length) {
+      return { ok: false, error: "This room is full (all character colors are in use)." };
+    }
+    room.players[socketId] = this.makePlayer(socketId, check.name, uniqueAvatar(room, avatar));
     room.lastActivity = Date.now();
     return { ok: true, room };
   }
 
   connectedPlayers(room) {
     return Object.values(room.players).filter((p) => p.connected);
+  }
+
+  updateAvatar(room, socketId, rawAvatar) {
+    if (!room?.players?.[socketId]) return { ok: false, error: "Player not found." };
+    if (room.state !== GAME_STATES.LOBBY) return { ok: false, error: "Appearance is locked during a game." };
+    const requested = validateAvatar(rawAvatar);
+    const avatar = uniqueAvatar(room, requested, socketId);
+    room.players[socketId].avatar = avatar;
+    room.lastActivity = Date.now();
+    return { ok: true, avatar, colorAdjusted: avatar.color !== requested.color };
   }
 
   /**
@@ -271,6 +305,9 @@ class RoomManager {
     }
     if (ALLOWED_TARGETS.includes(Number(patch.target))) {
       s.target = Number(patch.target);
+    }
+    if (ALLOWED_BATTLE_TARGETS.includes(Number(patch.battleTarget))) {
+      s.battleTarget = Number(patch.battleTarget);
     }
     if (typeof patch.arcade === "boolean") {
       s.arcade = patch.arcade;
@@ -356,9 +393,11 @@ module.exports = {
   ALLOWED_ROUNDS,
   ALLOWED_SECONDS,
   ALLOWED_TARGETS,
+  ALLOWED_BATTLE_TARGETS,
   AVATAR_EMOJIS,
   AVATAR_COLORS,
   validateAvatar,
+  uniqueAvatar,
   defaultSettings,
   ROOM_CODE_CHARS,
   ROOM_CODE_LENGTH,

@@ -7,8 +7,8 @@ const { Server } = require("socket.io");
 
 const {
   RoomManager, GAME_STATES, GAME_MODES,
-  ALLOWED_ROUNDS, ALLOWED_SECONDS, ALLOWED_TARGETS,
-  AVATAR_EMOJIS, AVATAR_COLORS
+  ALLOWED_ROUNDS, ALLOWED_SECONDS, ALLOWED_TARGETS, ALLOWED_BATTLE_TARGETS,
+  AVATAR_EMOJIS, AVATAR_COLORS, uniqueAvatar
 } = require("./src/roomManager");
 const { GameManager } = require("./src/gameManager");
 const { categoriesForMode } = require("./src/questionManager");
@@ -53,7 +53,9 @@ function roomView(room) {
     settings: room.settings,
     currentMode: room.currentMode ?? null,
     arcade: room.arcade
-      ? { legIndex: room.arcade.legIndex, totalLegs: room.arcade.playlist.length, playlist: room.arcade.playlist }
+      ? { legIndex: room.arcade.legIndex, playlist: room.arcade.playlist, battle: !!room.arcade.battle,
+          target: room.arcade.target, wins: room.arcade.wins, spinnerId: room.arcade.spinnerId,
+          awaitingSpin: !!room.arcade.awaitingSpin, pendingMode: room.arcade.pendingMode }
       : null,
     players: Object.values(room.players).map((p) => ({
       id: p.id,
@@ -70,9 +72,12 @@ function roomView(room) {
 // Static metadata the client needs to render the settings + character UI.
 const GAME_META = {
   modes: GAME_MODES,
+  readyModes: ["curling", "platformer", "pushy", "hidebomb", "colorfloor", "vanish", "fire", "racing", "flappy", "runner", "painter", "pong", "drawing", "trivia", "timeline", "map", "bomb"],
+  wipModes: ["bombpass", "redlight", "doors"],
   rounds: ALLOWED_ROUNDS,
   seconds: ALLOWED_SECONDS,
   targets: ALLOWED_TARGETS,
+  battleTargets: ALLOWED_BATTLE_TARGETS,
   avatarEmojis: AVATAR_EMOJIS,
   avatarColors: AVATAR_COLORS,
   categoriesByMode: Object.fromEntries(
@@ -88,7 +93,7 @@ function addTestBots(room) {
     ["bot:bean", "Bean", { emoji: AVATAR_EMOJIS[9], color: AVATAR_COLORS[6] }]
   ];
   for (const [id, name, avatar] of bots) {
-    room.players[id] = roomManager.makePlayer(id, name, avatar);
+    room.players[id] = roomManager.makePlayer(id, name, uniqueAvatar(room, avatar));
     room.players[id].isBot = true;
   }
   room.testMode = true;
@@ -310,6 +315,14 @@ io.on("connection", (socket) => {
     broadcastRoom(room);
   });
 
+  socket.on("player:avatar", ({ avatar } = {}) => {
+    const room = roomManager.getRoom(socket.data.roomCode);
+    const result = roomManager.updateAvatar(room, socket.id, avatar);
+    if (!result.ok) return socket.emit("room:error", { message: result.error });
+    socket.emit("player:avatar:accepted", result);
+    broadcastRoom(room);
+  });
+
   // Reconnect an existing player after a page refresh, using their token.
   socket.on("room:rejoin", ({ roomCode, token } = {}) => {
     const result = roomManager.rejoinRoom(socket.id, roomCode, token);
@@ -329,6 +342,17 @@ io.on("connection", (socket) => {
       resume: gameManager.buildResume(room, socket.id)
     });
     broadcastRoom(room);
+  });
+
+  socket.on("room:sync", () => {
+    const room = roomManager.getRoom(socket.data.roomCode);
+    const player = room?.players?.[socket.id];
+    if (!room || !player) return;
+    socket.emit("room:resumed", {
+      room: roomView(room), youAreHost: room.hostId === socket.id,
+      selfId: socket.id, token: player.token, meta: GAME_META,
+      resume: gameManager.buildResume(room, socket.id)
+    });
   });
 
   socket.on("room:leave", () => {
@@ -466,18 +490,21 @@ io.on("connection", (socket) => {
 
   socket.on("arena:position", (position = {}) => {
     const room = roomManager.getRoom(socket.data.roomCode);
+    if (!room?.arena || position.instanceId !== room.arena.instanceId) return;
     const result = gameManager.arenaPosition(room, socket.id, position);
     if (!result.ok) socket.emit("room:error", { message: result.error });
   });
 
-  socket.on("arena:jump", () => {
+  socket.on("arena:jump", ({ instanceId } = {}) => {
     const room = roomManager.getRoom(socket.data.roomCode);
+    if (!room?.arena || instanceId !== room.arena.instanceId) return;
     const result = gameManager.arenaAction(room, socket.id);
     if (!result.ok) socket.emit("room:error", { message: result.error });
   });
 
-  socket.on("arena:crash", () => {
+  socket.on("arena:crash", ({ instanceId } = {}) => {
     const room = roomManager.getRoom(socket.data.roomCode);
+    if (!room?.arena || instanceId !== room.arena.instanceId) return;
     const result = gameManager.arenaCrash(room, socket.id);
     if (!result.ok) socket.emit("room:error", { message: result.error });
   });
@@ -539,6 +566,13 @@ io.on("connection", (socket) => {
     broadcastRoom(room);
   });
 
+  socket.on("battle:spin", () => {
+    const room = roomManager.getRoom(socket.data.roomCode);
+    const result = gameManager.spinBattleWheel(room, socket.id);
+    if (!result.ok) socket.emit("room:error", { message: result.error });
+    else broadcastRoom(room);
+  });
+
   socket.on("game:restart", () => {
     const room = roomManager.getRoom(socket.data.roomCode);
     const result = gameManager.restartGame(room, socket.id);
@@ -593,7 +627,7 @@ setInterval(() => {
 }, 5 * 60 * 1000).unref();
 
 server.listen(PORT, () => {
-  console.log(`Closest Wins running at http://localhost:${PORT}`);
+  console.log(`Mini Mayhem running at http://localhost:${PORT}`);
   console.log(`Minimum players to start: ${MIN_PLAYERS} · Round length: ${ROUND_SECONDS}s`);
 });
 

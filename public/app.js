@@ -1,6 +1,6 @@
 "use strict";
 
-/* Closest Wins — client. The server is authoritative; this file only renders
+/* Mini Mayhem — client. The server is authoritative; this file only renders
    state pushed from the server and forwards player actions. */
 
 const socket = io();
@@ -20,7 +20,7 @@ const state = {
 const MODE_INFO = {
   trivia:   { name: "Trivia",   emoji: "🧠", desc: "Everyone guesses a number at once. Closest wins." },
   timeline: { name: "Timeline", emoji: "🕰️", desc: "Hitster-style: slot each event into your timeline. First to the target wins." },
-  curling:  { name: "Curling",  emoji: "🥌", desc: "Take turns — the leader shoots first and everyone sees each shot." },
+  curling:  { name: "Curling",  emoji: "🥌", desc: "Aim, set power, and slide stones into scoring zones." },
   bomb:     { name: "Balloon",  emoji: "🎈", desc: "Take turns pumping 1–3 times. Whoever pops the balloon loses the round." }
 };
 
@@ -76,6 +76,7 @@ function clearSession() {
 }
 
 let timerInterval = null;
+let reconnectNeeded = false;
 
 // ---- Element helpers --------------------------------------------------------
 const $ = (id) => document.getElementById(id);
@@ -215,6 +216,32 @@ function buildCreator() {
   pv.style.background = myAvatar.color;
 }
 
+function buildLobbyCreator(room) {
+  const self = room?.players?.find((p) => p.id === state.selfId);
+  if (self?.avatar) myAvatar = { ...self.avatar };
+  const eg = $("lobby-emoji-grid"), cg = $("lobby-color-grid");
+  if (!eg || !cg) return;
+  eg.innerHTML = ""; cg.innerHTML = "";
+  AVATAR_EMOJIS.forEach((emoji) => {
+    const button = document.createElement("button");
+    button.className = "emoji-opt" + (emoji === myAvatar.emoji ? " on" : "");
+    button.textContent = emoji;
+    button.addEventListener("click", () => socket.emit("player:avatar", { avatar: { ...myAvatar, emoji } }));
+    eg.appendChild(button);
+  });
+  const used = new Set((room?.players || []).filter((p) => p.id !== state.selfId && p.connected).map((p) => p.avatar?.color));
+  AVATAR_COLORS.forEach((color) => {
+    const button = document.createElement("button");
+    button.className = "color-opt" + (color === myAvatar.color ? " on" : "");
+    button.style.background = color;
+    button.disabled = used.has(color);
+    button.title = used.has(color) ? "Already used by another player" : "Choose this color";
+    button.addEventListener("click", () => socket.emit("player:avatar", { avatar: { ...myAvatar, color } }));
+    cg.appendChild(button);
+  });
+  const preview = $("lobby-char-preview"); preview.textContent = myAvatar.emoji; preview.style.background = myAvatar.color;
+}
+
 // ---- Home -------------------------------------------------------------------
 $("create-btn").addEventListener("click", () => {
   sound.ensure();
@@ -308,11 +335,32 @@ function resetToHome() {
 socket.on("connect", () => {
   hideBanner();
   const saved = loadSession();
-  if (saved && saved.code && saved.token && currentScreen === "home") {
+  if (saved && saved.code && saved.token && (currentScreen === "home" || reconnectNeeded)) {
     socket.emit("room:rejoin", { roomCode: saved.code, token: saved.token });
   }
+  reconnectNeeded = false;
 });
-socket.on("disconnect", () => { if (currentScreen !== "home") showBanner("Reconnecting…"); });
+socket.on("disconnect", () => {
+  reconnectNeeded = currentScreen !== "home";
+  if (reconnectNeeded) showBanner("Reconnecting…");
+});
+function recoverPhoneSession(){
+  if(!state.room)return;
+  const saved=loadSession();
+  if(!saved?.code||!saved?.token)return;
+  reconnectNeeded=true;showBanner("Reconnecting...");
+  // Mobile browsers can retain a stale connected socket after sleeping.
+  // Rejoining by stable token is safe and refreshes the entire round state.
+  if(socket.connected)socket.emit("room:rejoin",{roomCode:saved.code,token:saved.token});
+  else socket.connect();
+}
+document.addEventListener("visibilitychange",()=>{
+  if(document.visibilityState==="visible")recoverPhoneSession();
+});
+window.addEventListener("pageshow",()=>{
+  recoverPhoneSession();
+});
+window.addEventListener("focus",recoverPhoneSession);
 
 socket.on("room:resumed", ({ room, youAreHost, selfId, token, meta, resume }) => {
   hideBanner();
@@ -389,6 +437,10 @@ socket.on("room:updated", (room) => {
   if (room.state === "lobby") { renderLobby(room); showScreen("lobby"); }
   else if (room.state === "question" && currentScreen === "question") updateQuestionProgressFromRoom(room);
 });
+socket.on("player:avatar:accepted", ({ avatar, colorAdjusted }) => {
+  myAvatar = { ...avatar }; saveAvatar();
+  if (colorAdjusted) showBanner("That color was taken, so you received the next available color.", 2500);
+});
 
 socket.on("host:changed", ({ hostId }) => {
   state.isHost = hostId === state.selfId;
@@ -430,7 +482,11 @@ socket.on("round:progress", ({ answered, total }) => {
 });
 
 // Turn modes.
-socket.on("turn:started", (payload) => { state.mode = payload.mode; applyTurn(payload); });
+socket.on("turn:started", (payload) => {
+  state.mode = payload.mode;
+  const wait=payload.mode==="timeline"?Math.max(0,(state.timelineRevealUntil||0)-performance.now()):0;
+  if(wait>0)setTimeout(()=>applyTurn(payload),wait);else applyTurn(payload);
+});
 socket.on("turn:update", (payload) => {
   if (payload.mode === "curling") updateCurling(payload);
   else if (payload.mode === "bomb") updateBomb(payload);
@@ -628,6 +684,11 @@ socket.on("arena:racer-crashed", ({playerId,from,respawn}) => {
   target.speed=0;
   if(playerId===state.selfId)$("arena-status").textContent="Off the track! Respawning…";
 });
+socket.on("arena:horn", ({playerId}) => {
+  const car=playerId===state.selfId?arena.player:arena.players.get(playerId);
+  if(car)arena.bursts.push({x:car.x,y:car.y-18,born:performance.now(),color:"#fff",count:5});
+  sound.beep(playerId===state.selfId?520:460,.09,"square",.025);
+});
 socket.on("arena:flap",({playerId,vy})=>{
   const p=playerId===state.selfId?arena.player:arena.players.get(playerId);
   if(p)p.vy=vy;
@@ -646,6 +707,14 @@ socket.on("arena:runner-perfect",({playerId,type})=>{
 });
 socket.on("arena:painter",({territory,trails,players})=>{
   arena.painterTerritory=territory||{};arena.painterTrails=trails||{};updateArenaPlayers(players||[]);
+  // Paint and player positions come from the same authoritative packet. If a
+  // remote avatar is far behind its paint, catch it up immediately; ordinary
+  // nearby movement remains smoothly interpolated frame-to-frame.
+  for(const remote of (players||[])){
+    if(remote.playerId===state.selfId)continue;
+    const visual=arena.players.get(remote.playerId);
+    if(visual&&Math.hypot(remote.x-visual.x,remote.y-visual.y)>90){visual.x=remote.x;visual.y=remote.y;visual.tx=remote.x;visual.ty=remote.y;}
+  }
   const own=(players||[]).find((p)=>p.playerId===state.selfId);
   if(own&&arena.player&&Math.hypot(own.x-arena.player.x,own.y-arena.player.y)>80){arena.player.x=own.x;arena.player.y=own.y;arena.player.vx=0;arena.player.vy=0;}
   updatePainterLegend();
@@ -683,6 +752,11 @@ socket.on("doors:positions", ({players}) => updateDoorPlayers(players));
 socket.on("round:results", (payload) => {
   stopTimer();
   state.mode = payload.mode || state.mode;
+  if(payload.mode==="timeline"&&performance.now()<(state.timelineRevealUntil||0)){
+    const wait=state.timelineRevealUntil-performance.now();
+    setTimeout(()=>{renderResults(payload);showScreen("results");sound.beep(880,.14,"triangle");},wait);
+    return;
+  }
   if(payload.mode==="curling"&&curlingVisual.anim){
     curlingVisual.pendingResults=payload;
     $("curling-input").classList.add("hidden");
@@ -713,11 +787,77 @@ socket.on("round:results", (payload) => {
 });
 
 socket.on("arcade:intermission", (payload) => { renderIntermission(payload); showScreen("intermission"); });
+socket.on("battle:wheel-result", (payload) => animateBattleWheel(payload));
+socket.on("battle:started", ({legIndex,mode}) => {
+  if (state.room?.arcade) state.room.arcade.legIndex = legIndex;
+  state.mode = mode || state.mode;
+});
 socket.on("game:finished", (payload) => { renderFinal(payload); showScreen("final"); });
 
 $("inter-next-btn").addEventListener("click", () => { sound.beep(560, 0.1); socket.emit("arcade:advance"); });
+$("battle-spin-btn").addEventListener("click", () => {
+  $("battle-spin-btn").disabled = true; $("battle-wheel-center").textContent = "…";
+  sound.beep(420,.08,"square"); socket.emit("battle:spin");
+});
+
+const WHEEL_COLORS = ["#f97316","#3b82f6","#22c55e","#a855f7","#ec4899","#eab308","#06b6d4","#ef4444"];
+const WHEEL_SHORT_NAMES = {platformer:"Build & Race",hidebomb:"Hide & Boom",colorfloor:"Twister",vanish:"Vanish",fire:"Fire",
+  racing:"Racers",flappy:"Dragon",runner:"Wild Run",painter:"Painter",pong:"Pong",timeline:"Timeline",drawing:"Drawing"};
+function paintBattleWheel(options = []) {
+  const wheel = $("battle-wheel"), count = Math.max(1, options.length);
+  wheel.style.background = `conic-gradient(${options.map((_,i) => `${WHEEL_COLORS[i%WHEEL_COLORS.length]} ${i*360/count}deg ${(i+1)*360/count}deg`).join(",")})`;
+  wheel.innerHTML="";
+  const arcWidth=2*Math.PI*88/count;
+  options.forEach((mode,index)=>{
+    const info=MODE_INFO[mode]||{emoji:"🎮",name:mode},name=WHEEL_SHORT_NAMES[mode]||info.name||mode;
+    const showName=count<=8&&name.length*5.4<=arcWidth-8;
+    const label=document.createElement("span");label.className="wheel-segment-label"+(showName?" has-name":" icon-only");
+    const angle=(index+.5)*360/count;
+    label.style.setProperty("--wheel-angle",`${angle}deg`);label.style.setProperty("--wheel-counter-angle",`${-angle}deg`);
+    label.innerHTML=`<b>${info.emoji||"🎮"}</b>${showName?`<small>${esc(name)}</small>`:""}`;
+    wheel.appendChild(label);
+  });
+  const center=document.createElement("span");center.id="battle-wheel-center";center.className="battle-wheel-center";center.textContent="SPIN";
+  wheel.appendChild(center);
+}
+function animateBattleWheel(payload) {
+  const options = payload.options || [], selected = options.indexOf(payload.selectedMode), wheel = $("battle-wheel");
+  paintBattleWheel(options);
+  const slice = 360 / Math.max(1, options.length), rotation = 1440 + (360 - (selected + .5) * slice);
+  wheel.style.transition = "none"; wheel.style.transform = "rotate(0deg)"; void wheel.offsetWidth;
+  wheel.style.transition = "transform 3.15s cubic-bezier(.12,.72,.08,1)"; wheel.style.transform = `rotate(${rotation}deg)`;
+  $("battle-spin-btn").classList.add("hidden"); $("battle-spinner-label").textContent = "The wheel is choosing…";
+  setTimeout(() => {
+    const info = MODE_INFO[payload.selectedMode] || {};
+    $("battle-wheel-center").textContent = info.emoji || "🎮";
+    $("inter-next").textContent = `${info.emoji || ""} ${info.name || payload.selectedMode}`;
+    $("inter-progress").textContent = "Get ready — the minigame is starting!";
+    $("battle-spinner-label").textContent = `${info.name || payload.selectedMode} selected`;
+    sound.chord([523,659,784],.22);
+  }, 2850);
+}
 
 function renderIntermission(payload) {
+  if (payload.battle) {
+    $("inter-kicker").textContent = payload.first ? "BATTLE MODE" : "MINIGAME COMPLETE";
+    $("inter-next").textContent = payload.first ? `First to ${payload.target} wins takes the crown!` : "Time to spin again";
+    $("inter-progress").textContent = payload.lastWinners?.length ? "A minigame win has been added to the scoreboard." : "The spinner rotates after every minigame.";
+    $("battle-wheel-wrap").classList.remove("hidden"); $("inter-next-btn").classList.add("hidden");
+    paintBattleWheel(payload.options || []); $("battle-wheel").style.transform = "rotate(0deg)";
+    $("battle-wheel-center").textContent = "SPIN";
+    const mySpin = payload.spinnerId === state.selfId;
+    $("battle-spinner-label").textContent = mySpin ? "Your turn — give the wheel a spin!" : `${payload.spinnerName || "Another player"} gets to spin.`;
+    $("battle-spin-btn").classList.toggle("hidden", !mySpin); $("battle-spin-btn").disabled = false;
+    $("inter-host-note").textContent = mySpin ? "" : "Everyone sees the same server-selected result.";
+    const list = $("inter-standings"); list.innerHTML = "";
+    (payload.standings || []).forEach((s,i) => {
+      const li=document.createElement("li"); if(s.playerId===state.selfId)li.classList.add("self");
+      li.innerHTML=`<span class="rank">${i===0?"👑":i+1}</span><div class="r-main"><div class="r-top"><span class="r-name">${avatarHtml(s.avatar)} ${esc(s.name)}</span><span class="r-guess">${s.wins||0} / ${payload.target} wins</span></div></div><span class="r-points">${"★".repeat(s.wins||0)}</span>`;
+      list.appendChild(li);
+    });
+    sound.chord([440,587,740],.3); return;
+  }
+  $("battle-wheel-wrap").classList.add("hidden");
   const leg = (payload.legIndex ?? 0) + 1;
   const total = payload.totalLegs ?? 1;
   $("inter-kicker").textContent = `GAME ${leg} OF ${total} COMPLETE`;
@@ -766,6 +906,8 @@ function renderLobby(room) {
     list.appendChild(li);
   }
 
+  buildLobbyCreator(room);
+
   renderSettings(room);
 
   const count = room.players.filter((p) => p.connected).length;
@@ -795,6 +937,35 @@ function seg(containerId, options, current, onPick) {
   }
 }
 
+function renderModeCatalog(containerId, selected, onPick, multi = false) {
+  const c = $(containerId), meta = state.meta || {};
+  const ready = meta.readyModes || meta.modes || [], wip = meta.wipModes || [];
+  const chosen = new Set(Array.isArray(selected) ? selected : [selected]);
+  c.className = "mode-catalog";
+  c.innerHTML = `<div class="mode-tabs"><button class="mode-tab active" data-tab="ready">Ready to play</button>`+
+    `<button class="mode-tab" data-tab="wip">Work in progress <span>${wip.length}</span></button></div>`+
+    `<p class="mode-tab-note">Friend-test ready minigames.</p><div class="mode-panel" data-panel="ready"></div>`+
+    `<div class="mode-panel hidden" data-panel="wip"></div>`;
+  const fill = (panelName, modes) => {
+    const panel = c.querySelector(`[data-panel="${panelName}"]`);
+    modes.forEach((m) => {
+      const info = MODE_INFO[m] || { name: m, emoji: "🎮" }, button = document.createElement("button");
+      button.className = "mode-card" + (chosen.has(m) ? " selected" : "") + (panelName === "wip" ? " wip" : "");
+      button.disabled = !state.isHost;
+      button.innerHTML = `<span class="mode-card-icon">${info.emoji}</span><span><b>${esc(info.name)}</b><small>${esc(info.desc || "")}</small></span>`+
+        (multi && chosen.has(m) ? `<strong>✓</strong>` : "");
+      button.addEventListener("click", () => onPick(m)); panel.appendChild(button);
+    });
+  };
+  fill("ready", ready); fill("wip", wip);
+  c.querySelectorAll(".mode-tab").forEach((tab) => tab.addEventListener("click", () => {
+    const name = tab.dataset.tab;
+    c.querySelectorAll(".mode-tab").forEach((x) => x.classList.toggle("active", x === tab));
+    c.querySelectorAll(".mode-panel").forEach((x) => x.classList.toggle("hidden", x.dataset.panel !== name));
+    c.querySelector(".mode-tab-note").textContent = name === "ready" ? "Friend-test ready minigames." : "Playable prototypes that still need polish.";
+  }));
+}
+
 function renderSettings(room) {
   const s = room.settings || {};
   const meta = state.meta || { modes: ["trivia"], rounds: [5], seconds: [45], targets: [11], categoriesByMode: {} };
@@ -802,7 +973,7 @@ function renderSettings(room) {
   const playlist = Array.isArray(s.playlist) ? s.playlist : [];
 
   seg("set-arcade",
-    [{ value: false, label: "Off" }, { value: true, label: "🎮 On" }],
+    [{ value: false, label: "🎮 Single game" }, { value: true, label: "🏆 Battle wheel" }],
     arcade, (v) => socket.emit("settings:update", { arcade: v }));
 
   // Mode selector (single mode) vs playlist builder (arcade).
@@ -811,33 +982,24 @@ function renderSettings(room) {
   $("set-playlist-wrap").classList.toggle("hidden", !arcade);
 
   if (!arcade) {
-    seg("set-mode",
-      meta.modes.map((m) => ({ value: m, label: `${MODE_INFO[m]?.emoji || ""} ${MODE_INFO[m]?.name || m}` })),
-      s.mode,
+    renderModeCatalog("set-mode", s.mode,
       (v) => socket.emit("settings:update", { mode: v, categories: null }));
     $("mode-desc").textContent = MODE_INFO[s.mode]?.desc || "";
   } else {
-    const box = $("set-playlist");
-    box.innerHTML = "";
-    meta.modes.forEach((m) => {
-      const pos = playlist.indexOf(m);
-      const chip = document.createElement("button");
-      chip.className = "chip" + (pos >= 0 ? " on" : "");
-      chip.innerHTML = `${MODE_INFO[m]?.emoji || ""} ${MODE_INFO[m]?.name || m}` +
-        (pos >= 0 ? ` <b>${pos + 1}</b>` : "");
-      chip.disabled = !state.isHost;
-      chip.addEventListener("click", () => {
-        let next = playlist.slice();
-        if (pos >= 0) next.splice(pos, 1); else next.push(m);
-        if (next.length === 0) next = [m]; // keep at least one
-        socket.emit("settings:update", { playlist: next, arcade: true });
-      });
-      box.appendChild(chip);
-    });
+    renderModeCatalog("set-playlist", playlist, (m) => {
+      const pos = playlist.indexOf(m); let next = playlist.slice();
+      if (pos >= 0) next.splice(pos, 1); else next.push(m);
+      if (next.length === 0) next = [m];
+      socket.emit("settings:update", { playlist: next, arcade: true });
+    }, true);
     $("playlist-preview").textContent = playlist.length
-      ? "Order: " + playlist.map((m) => MODE_INFO[m]?.name || m).join(" → ")
-      : "Pick at least one mode.";
+      ? `${playlist.length} minigames are on the random wheel.`
+      : "Pick at least one minigame.";
   }
+
+  $("set-battle-target-wrap").classList.toggle("hidden", !arcade);
+  if (arcade) seg("set-battle-target", (meta.battleTargets || [3,5,7,10]).map((n) => ({ value:n, label:`${n} wins` })),
+    s.battleTarget || 5, (v) => socket.emit("settings:update", { battleTarget:v }));
 
   seg("set-rounds",
     meta.rounds.map((r) => ({ value: r, label: String(r) })),
@@ -923,7 +1085,8 @@ function applyQuestion(payload, { alreadyGuessed, guess } = {}) {
 function triviaSliderConfig(question) {
   const hint = `${question?.text || ""} ${question?.unit || ""}`.toLowerCase();
   let max = 1_000_000;
-  if (/%|percent/.test(hint)) max = 100;
+  if (/moon from earth/.test(hint)) max = 500_000;
+  else if (/%|percent/.test(hint)) max = 100;
   else if (/\b(age|years old)\b/.test(hint)) max = 150;
   else if (/\b(year|date|founded|released|born|built)\b/.test(hint)) max = 2500;
   else if (/\btemperature|°c|celsius|fahrenheit/.test(hint)) max = 1000;
@@ -965,7 +1128,8 @@ $("guess-input").addEventListener("input", () => {
 
 function legPrefix() {
   const a = state.room && state.room.arcade;
-  return a ? `🎮 Game ${a.legIndex + 1}/${a.totalLegs} · ` : "";
+  if (!a) return "";
+  return a.battle ? `🏆 Battle game ${a.legIndex + 1} · ` : `🎮 Game ${a.legIndex + 1}/${a.totalLegs} · `;
 }
 
 function updateQuestionProgressFromRoom(room) {
@@ -1160,6 +1324,7 @@ function renderMyTimeline(cards, interactive) {
 }
 
 function showTimelineToast(p) {
+  state.timelineRevealUntil=performance.now()+2600;
   const el = $("tl-toast");
   const who = p.playerId === state.selfId ? "You" : esc(p.name);
   el.className = "tl-toast " + (p.correct ? "good" : "bad");
@@ -1173,6 +1338,7 @@ function showTimelineToast(p) {
 }
 
 function showTeamResult(p) {
+  state.timelineRevealUntil=performance.now()+2800;
   if (state.team) { state.team.shared = p.sharedTimeline || state.team.shared; renderVoteTimeline(); }
   renderTeamStandings(p.standings || []);
   const el = $("tl-toast");
@@ -1330,7 +1496,8 @@ function drawCurlingRink(now=performance.now()){
     ctx.fillStyle="rgba(0,0,0,.22)";ctx.beginPath();ctx.ellipse(x+3,y+6,17,7,0,0,Math.PI*2);ctx.fill();
     ctx.fillStyle=color;ctx.strokeStyle="#fff";ctx.lineWidth=2;ctx.beginPath();ctx.arc(x,y,14,0,Math.PI*2);ctx.fill();ctx.stroke();
     ctx.fillStyle="#e2e8f0";ctx.fillRect(x-5,y-20,10,8);
-    ctx.fillStyle="#fff";ctx.font="900 9px sans-serif";ctx.textAlign="center";ctx.fillText(shot?.throwNumber||"",x,y+3);
+    ctx.fillStyle="#fff";ctx.font="12px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";
+    ctx.fillText(shot?.avatar?.emoji||shot?.throwNumber||"",x,y+1);ctx.textBaseline="alphabetic";
   });
   if(canShowAim&&curlingControl.stage==="direction"){
     const dir=curlingDirection(now);drawCurlingAim(ctx,dir,null,now);
@@ -1403,6 +1570,7 @@ function updateBomb(payload) {
     const activePlayer = active && state.room ? state.room.players.find((p) => p.id === active.playerId) : null;
     if (activePlayer && activePlayer.avatar) balloon.color = activePlayer.avatar.color;
     bombSyncLine(fresh);
+    drawBalloon();
   } else {
     // turn:update — a pump happened. Derive WHO pumped (whoever's turn it was)
     // and HOW MANY from the change in total, so it works even when the payload
@@ -1967,7 +2135,7 @@ $("results-map-svg").addEventListener("pointermove", (e) => {
 
 // ===================== HIDE & BLOW UP =====================
 const hidebomb = {
-  state: null, ownChoice: null, revealChoices: [],
+  state: null, ownChoice: null, revealChoices: [], cursor: 0,
   objects: [
     { emoji: "💣", name: "B Cannon", key: "B" }, { emoji: "💣", name: "A Cannon", key: "A" },
     { emoji: "💣", name: "Y Cannon", key: "Y" }, { emoji: "💣", name: "X Cannon", key: "X" }
@@ -1979,6 +2147,9 @@ function applyHideBombState(payload) {
   hidebomb.state = payload;
   hidebomb.ownChoice = Number.isInteger(payload.ownChoice) ? payload.ownChoice : null;
   hidebomb.revealChoices = payload.choices || [];
+  const available=hidebomb.objects.map((_,i)=>i).filter((i)=>!payload.attacked?.includes(i));
+  if(Number.isInteger(hidebomb.ownChoice))hidebomb.cursor=hidebomb.ownChoice;
+  else if(!available.includes(hidebomb.cursor))hidebomb.cursor=available[0]??0;
   const isBomber = payload.bomberId === state.selfId;
   const me = payload.alive?.find((p) => p.playerId === state.selfId);
   const blindfolded = isBomber && payload.stage === "hide";
@@ -2008,7 +2179,7 @@ function applyHideBombState(payload) {
     $("hidebomb-title").textContent = "Explosion!";
   }
   $("hidebomb-status").textContent = "";
-  renderHideBombBoard(); renderHideBombPlayers();
+  renderHideBombBoard(); renderHideBombPlayers(); renderHideBombControls();
   startTimer(payload.deadline, "hidebomb-timer"); showScreen("hidebomb");
 }
 
@@ -2024,14 +2195,15 @@ function renderHideBombBoard(exploded = null) {
     const igniting = payload.stage === "ignite" && payload.pendingTarget === index;
     button.className = "hide-object" + (destroyed ? " destroyed" : "") +
       (hidebomb.ownChoice === index ? " selected" : "") +
+      (hidebomb.cursor === index && !destroyed ? " cursor" : "") +
       (exploded === index ? " explode" : "") + (igniting ? " igniting" : "");
     button.disabled = destroyed || payload.stage === "ignite" || payload.stage === "reveal";
     button.innerHTML = `<span class="object-emoji">${destroyed ? "💥" : obj.emoji}</span>` +
       `<span class="object-name">${obj.name}</span><span class="cannon-fuse"></span>`;
     if (payload.stage === "hide" && !isBomber && me?.alive && !destroyed) {
-      button.addEventListener("click", () => socket.emit("hidebomb:choose", { objectIndex: index }));
+      button.addEventListener("click", () => {hidebomb.cursor=index;renderHideBombBoard();renderHideBombControls();});
     } else if (payload.stage === "attack" && isBomber && !destroyed) {
-      button.addEventListener("click", () => socket.emit("hidebomb:attack", { objectIndex: index }));
+      button.addEventListener("click", () => {hidebomb.cursor=index;renderHideBombBoard();renderHideBombControls();});
     }
     if (payload.stage === "reveal") {
       const hidden = hidebomb.revealChoices.filter((p) => p.objectIndex === index);
@@ -2047,10 +2219,37 @@ function renderHideBombBoard(exploded = null) {
       const marker = document.createElement("span"); marker.className = "hidden-avatar";
       marker.appendChild(PaperCharacter.element(meAvatar, "idle", "You"));
       button.appendChild(marker);
+    } else if (hidebomb.cursor === index && ((payload.stage === "hide"&&!isBomber&&me?.alive)||(payload.stage === "attack"&&isBomber))) {
+      const meAvatar = state.room?.players?.find((p) => p.id === state.selfId)?.avatar;
+      const marker = document.createElement("span"); marker.className = "cursor-avatar";
+      marker.appendChild(PaperCharacter.element(meAvatar, "run", "You")); button.appendChild(marker);
     }
     board.appendChild(button);
   });
 }
+
+function moveHideBombCursor(delta){
+  const available=hidebomb.objects.map((_,i)=>i).filter((i)=>!hidebomb.state?.attacked?.includes(i));
+  if(!available.length)return;const current=Math.max(0,available.indexOf(hidebomb.cursor));
+  hidebomb.cursor=available[(current+delta+available.length)%available.length];
+  renderHideBombBoard();renderHideBombControls();sound.beep(360,.035,"square",.015);
+}
+function commitHideBombCursor(){
+  const payload=hidebomb.state;if(!payload)return;const isBomber=payload.bomberId===state.selfId;
+  const me=payload.alive?.find((p)=>p.playerId===state.selfId);
+  if(payload.stage==="hide"&&!isBomber&&me?.alive)socket.emit("hidebomb:choose",{objectIndex:hidebomb.cursor});
+  else if(payload.stage==="attack"&&isBomber)socket.emit("hidebomb:attack",{objectIndex:hidebomb.cursor});
+}
+function renderHideBombControls(){
+  const payload=hidebomb.state,isBomber=payload?.bomberId===state.selfId;
+  const me=payload?.alive?.find((p)=>p.playerId===state.selfId);
+  const active=!!payload&&((payload.stage==="hide"&&!isBomber&&me?.alive)||(payload.stage==="attack"&&isBomber));
+  $("hidebomb-controls").classList.toggle("hidden",!active);
+  if(active)$("hidebomb-action").textContent=isBomber?"🔥 LIGHT THIS FUSE":"HIDE HERE";
+}
+$("hidebomb-left").addEventListener("click",()=>moveHideBombCursor(-1));
+$("hidebomb-right").addEventListener("click",()=>moveHideBombCursor(1));
+$("hidebomb-action").addEventListener("click",commitHideBombCursor);
 
 function renderHideBombPlayers() {
   const box = $("hidebomb-players"); box.innerHTML = "";
@@ -2072,12 +2271,17 @@ function applyHideBombReveal(payload) {
     : "The survivors escaped this blast.";
   $("hidebomb-status").textContent = payload.turn < payload.maxTurns ? "The bomber is moving to the next fuse…" : "";
   renderHideBombBoard(payload.target); renderHideBombPlayers();
+  renderHideBombControls();
   sound.beep(75,.45,"sawtooth",.06);
   setTimeout(()=>sound.beep(48,.55,"triangle",.045),70);
 }
 
 window.addEventListener("keydown", (e) => {
   if (currentScreen !== "hidebomb" || e.repeat || !hidebomb.state) return;
+  if(e.key==="ArrowLeft"||e.key==="ArrowRight"){
+    e.preventDefault();moveHideBombCursor(e.key==="ArrowLeft"?-1:1);return;
+  }
+  if(e.key===" "||e.key==="Enter"){e.preventDefault();commitHideBombCursor();return;}
   const index = hidebomb.objects.findIndex((o) => o.key.toLowerCase() === e.key.toLowerCase());
   if (index < 0 || hidebomb.state.attacked?.includes(index)) return;
   const isBomber = hidebomb.state.bomberId === state.selfId;
@@ -2213,7 +2417,13 @@ function applyDrawingStart(payload) {
   (payload.strokes || []).forEach(drawRemoteStroke);
   startTimer(payload.deadline, "drawing-timer");
   showScreen("drawing");
+  if (!drawing.isDrawer) setTimeout(() => $("drawing-guess")?.focus(), 250);
 }
+
+document.querySelectorAll("[data-drawing-color]").forEach((button)=>button.addEventListener("click",()=>{
+  $("drawing-color").value=button.dataset.drawingColor;
+  document.querySelectorAll("[data-drawing-color]").forEach((item)=>item.classList.toggle("on",item===button));
+}));
 
 function drawingPoint(e) {
   const c = $("drawing-canvas"), r = c.getBoundingClientRect();
@@ -2268,7 +2478,7 @@ function applyPushyStart(payload) {
   state.mode = "pushy"; state.deadline = payload.deadline;
   pushy.phase = "playing"; pushy.done = !!payload.alreadyDone; pushy.seed = payload.seed || 1;
   const ownStart = (payload.players || []).find((p) => p.playerId === state.selfId);
-  pushy.player = { x: ownStart?.x ?? 360, y: ownStart?.y ?? 220, r: 17, vx: 0, vy: 0 };
+  pushy.player = { x: ownStart?.x ?? 360, y: ownStart?.y ?? 220, r: 14, vx: 0, vy: 0 };
   pushy.remotePlayers = new Map();
   updatePushyPositions(payload.players || []);
   pushy.penguins = [];
@@ -2284,12 +2494,26 @@ function applyPushyStart(payload) {
   const frame = (now) => {
     const dt = Math.min(.033, (now-previous)/1000); previous = now;
     if (!pushy.done) stepPushy(dt, now);
+    else stepPushySpectator(dt, now);
     drawPushy();
     if (pushy.phase === "playing") pushy.raf = requestAnimationFrame(frame);
   };
   cancelAnimationFrame(pushy.raf); pushy.raf = requestAnimationFrame(frame);
 }
+function stepPushySpectator(dt,now){
+  smoothPushyRemotes(dt);
+  const elapsed=now-pushy.startedAt;
+  if(elapsed-pushy.lastSpawn>Math.max(360,820-elapsed/38)){
+    pushy.lastSpawn=elapsed;const count=3+Math.floor(pushyRandom()*5),baseY=78+pushyRandom()*260;
+    for(let i=0;i<count;i++){const large=pushyRandom()<.16,r=large?20:13+pushyRandom()*3;pushy.penguins.push({
+      x:-35-i*(25+pushyRandom()*19),y:Math.max(78,Math.min(362,baseY+(i-(count-1)/2)*31+(pushyRandom()-.5)*16)),
+      vx:165+elapsed/100+pushyRandom()*65-(large?18:0),vy:0,r,large,phase:pushyRandom()*Math.PI*2});}
+  }
+  for(const penguin of pushy.penguins){penguin.x+=penguin.vx*dt;penguin.y+=penguin.vy*dt;}
+  pushy.penguins=pushy.penguins.filter((q)=>q.x>-340&&q.x<780&&q.y>-60&&q.y<500);
+}
 function stepPushy(dt, now) {
+  smoothPushyRemotes(dt);
   const p = pushy.player, ax = ((pushy.keys.right?1:0)-(pushy.keys.left?1:0))*650;
   const ay = ((pushy.keys.down?1:0)-(pushy.keys.up?1:0))*650;
   p.vx = (p.vx+ax*dt)*Math.pow(.04,dt); p.vy = (p.vy+ay*dt)*Math.pow(.04,dt);
@@ -2320,14 +2544,15 @@ function stepPushy(dt, now) {
   // Other players share the same ice and can gently bump one another.
   for (const other of pushy.remotePlayers.values()) {
     if (other.done) continue;
-    const dx=p.x-other.x,dy=p.y-other.y,dist=Math.hypot(dx,dy),min=34;
+    const dx=p.x-other.x,dy=p.y-other.y,dist=Math.hypot(dx,dy),min=28;
     if(dist>0&&dist<min){const force=(min-dist)*5;p.vx+=dx/dist*force;p.vy+=dy/dist*force;}
   }
-  if (now-pushy.lastPositionSent > 80) {
+  if (now-pushy.lastPositionSent > 55) {
     pushy.lastPositionSent=now;
     socket.emit("pushy:position",{x:p.x,y:p.y,vx:p.vx,vy:p.vy});
   }
-  if (p.x < 105 || p.x > 615 || p.y < 65 || p.y > 375) finishPushy("dead");
+  // The ice visibly reaches the left edge, so that entire shelf is safe.
+  if (p.x < 14 || p.x > 615 || p.y < 65 || p.y > 375) finishPushy("dead");
   if (Date.now() >= state.deadline-120) finishPushy("survived");
 }
 function drawCrowdPenguin(ctx,q,now){
@@ -2355,10 +2580,13 @@ function drawPushy() {
   ctx.fillStyle=water;ctx.fillRect(0,0,c.width,c.height);
   ctx.strokeStyle="rgba(255,255,255,.16)";ctx.lineWidth=3;
   for(let y=25;y<c.height;y+=38){ctx.beginPath();ctx.moveTo(0,y);ctx.quadraticCurveTo(c.width*.5,y+12,c.width,y);ctx.stroke();}
-  const ice=ctx.createLinearGradient(100,60,620,380);
+  const ice=ctx.createLinearGradient(0,60,620,380);
   ice.addColorStop(0,"#cffafe");ice.addColorStop(.55,"#67e8f9");ice.addColorStop(1,"#a5f3fc");
-  ctx.fillStyle=ice;ctx.fillRect(100,60,520,320);
-  ctx.strokeStyle="#ecfeff";ctx.lineWidth=8;ctx.strokeRect(100,60,520,320);
+  // The playable shelf still begins at x=100, but the visible ice continues
+  // off-screen so incoming penguins appear to waddle along the same floe.
+  ctx.fillStyle=ice;ctx.fillRect(0,60,620,320);
+  ctx.strokeStyle="#ecfeff";ctx.lineWidth=8;ctx.beginPath();
+  ctx.moveTo(0,60);ctx.lineTo(620,60);ctx.lineTo(620,380);ctx.lineTo(0,380);ctx.stroke();
   ctx.strokeStyle="rgba(14,116,144,.22)";ctx.lineWidth=2;
   [[170,120,210,155],[520,105,485,155],[270,330,305,292],[460,300,430,267]].forEach(v=>{
     ctx.beginPath();ctx.moveTo(v[0],v[1]);ctx.lineTo(v[2],v[3]);ctx.lineTo(v[2]+15,v[3]+8);ctx.stroke();
@@ -2367,7 +2595,7 @@ function drawPushy() {
     .forEach((q)=>drawCrowdPenguin(ctx,q,performance.now()));
   for (const other of pushy.remotePlayers.values()) {
     PaperCharacter.draw(ctx,{
-      x:other.x,y:other.y,size:48,avatar:other.avatar,
+      x:other.x,y:other.y,size:40,avatar:other.avatar,
       state:other.done?"eliminated":(Math.hypot(other.vx||0,other.vy||0)>20?"run":"idle"),
       direction:(other.vx||0)<-2?-1:1,time:performance.now()
     });
@@ -2377,7 +2605,7 @@ function drawPushy() {
   if (p) {
     const me=state.room?.players?.find((x)=>x.id===state.selfId);
     PaperCharacter.draw(ctx,{
-      x:p.x,y:p.y,size:52,avatar:me?.avatar,
+      x:p.x,y:p.y,size:42,avatar:me?.avatar,
       state:p.animState||(performance.now() < (p.stunUntil||0)?"stunned":(Math.hypot(p.vx,p.vy)>22?"run":"idle")),
       direction:p.vx < -2 ? -1 : 1,time:performance.now()
     });
@@ -2389,9 +2617,18 @@ function updatePushyPositions(players) {
   if (!Array.isArray(players)) return;
   const next = new Map();
   players.forEach((p) => {
-    if (p.playerId !== state.selfId) next.set(p.playerId,p);
+    if (p.playerId !== state.selfId) {
+      const old=pushy.remotePlayers.get(p.playerId);
+      next.set(p.playerId,old?{...old,...p,x:old.x,y:old.y,tx:p.x,ty:p.y}:{...p,tx:p.x,ty:p.y});
+    }
   });
   pushy.remotePlayers = next;
+}
+function smoothPushyRemotes(dt){
+  const blend=1-Math.exp(-dt*14);
+  for(const remote of pushy.remotePlayers.values()){
+    if(Number.isFinite(remote.tx)){remote.x+=(remote.tx-remote.x)*blend;remote.y+=(remote.ty-remote.y)*blend;}
+  }
 }
 function finishPushy(outcome) {
   if (pushy.done) return;
@@ -2517,17 +2754,18 @@ function applyPlatformerBuild(payload) {
 function renderPlatformerTools() {
   if (!platformer.view) return;
   const tools=$("platformer-tools"), pool=platformer.view.pool || {};
-  tools.innerHTML="";
+  tools.classList.add("platformer-inventory");
+  tools.innerHTML=`<div class="inventory-heading"><strong>AVAILABLE BLOCKS</strong><span>Pick one, then place its ghost on the grid</span></div>`;
   const labels={
     solid:"🧱 Block",spike:"🔺 Spikes",bouncy:"🟩 Bounce",
     ice:"🧊 Ice",crumble:"🟧 Crumble",saw:"⚙️ Saw",
     conveyor:"➡️ Conveyor",bombtrap:"💣 Demolish"
   };
   (platformer.view.hand || []).forEach((type) => {
-    const b = document.createElement("button");
-    b.className = "btn btn-secondary" + (type === platformer.selected ? " active" : "");
     const remaining=pool[type] ?? 0;
-    b.textContent=`${labels[type] || type} · ${remaining}`;
+    const b = document.createElement("button");
+    b.className = "inventory-item" + (type === platformer.selected ? " active" : "") + (remaining<1?" empty":"");
+    b.innerHTML=`<span>${labels[type] || type}</span><strong>${remaining}</strong>`;
     b.disabled=platformer.locked || (remaining < 1 && type !== platformer.selected);
     b.addEventListener("click", () => {
       platformer.selected = type;
@@ -2980,12 +3218,24 @@ const arena = {
   renderer:null,bursts:[],lastJumpAt:0,camY:null,tileLayout:[],scrambleUntil:0,colorCycle:-1,
   bombs:[],blasts:[],crates:[],powerups:[],trackId:"square"
 };
+function pongControlAxis(){
+  return {axis:"horizontal",sign:-1};
+}
 const RACE_TRACKS={
   square:{name:"Block Circuit",width:92,points:[[130,90],[590,90],[640,140],[640,320],[590,370],[130,370],[80,320],[80,140]],
-    checkpoints:[[640,140],[590,370],[80,320],[130,90]]},
+    checkpoints:[[640,230],[360,370],[80,230],[360,90]]},
   swing:{name:"Wiggly Way",width:82,points:[[110,100],[310,70],[520,105],[630,190],[540,260],[630,350],[390,375],[250,310],[90,350],[120,220],[260,205]],
-    checkpoints:[[630,190],[630,350],[250,310],[120,220],[110,100]]}
+    checkpoints:[[575,148],[585,305],[320,343],[105,285],[210,85]]}
 };
+function raceGateNormal(track,gate){
+  let best={distance:Infinity,nx:0,ny:1};
+  for(let i=0;i<track.points.length;i++){
+    const a=track.points[i],b=track.points[(i+1)%track.points.length],dx=b[0]-a[0],dy=b[1]-a[1],length=Math.hypot(dx,dy)||1;
+    const distance=pointSegmentDistance(gate[0],gate[1],a[0],a[1],b[0],b[1]);
+    if(distance<best.distance)best={distance,nx:-dy/length,ny:dx/length};
+  }
+  return best;
+}
 function pointSegmentDistance(px,py,x1,y1,x2,y2){
   const dx=x2-x1,dy=y2-y1,len=dx*dx+dy*dy;
   const t=len?Math.max(0,Math.min(1,((px-x1)*dx+(py-y1)*dy)/len)):0;
@@ -3022,7 +3272,8 @@ VANISH.tw = VANISH.w/VANISH.cols; VANISH.th = VANISH.h/VANISH.rows;
 function cellRect(col,row){ return { x: VANISH.x0+col*VANISH.tw, y: VANISH.y0+row*VANISH.th }; }
 function applyArenaStart(payload) {
   state.mode = payload.mode; state.deadline = payload.deadline;
-  arena.mode = payload.mode; arena.done = false; arena.safeColor = payload.safeColor || 0;
+  for(const key of ["left","right","up","down"])arena.keys[key]=false;
+  arena.mode = payload.mode; arena.instanceId=payload.instanceId; arena.done = false; arena.safeColor = payload.safeColor || 0;
   arena.tileLayout=payload.tileLayout||[];arena.dangerAt=payload.dangerAt||0;
   arena.scrambleUntil=payload.scrambleUntil||0;arena.colorCycle=payload.cycle??-1;
   arena.holderId = payload.holderId; arena.holderSince = performance.now();
@@ -3049,6 +3300,7 @@ function applyArenaStart(payload) {
     upgrades:me?.upgrades||{range:2,bombs:1,speed:0},paddleT:me?.paddleT??.5,
     distance:me?.distance||0,serverDistance:me?.distance||0,coins:me?.coins||0,perfects:me?.perfects||0,
     collectedCoins:me?.collectedCoins||[],boostUntil:me?.boostUntil||0,painterSpeedUntil:me?.painterSpeedUntil||0,painterStunnedUntil:me?.painterStunnedUntil||0 };
+  arena.player.lastSafeX=arena.player.x;arena.player.lastSafeY=arena.player.y;
   arena.camY = (me?.layer||0) * VANISH.spacing; // camera starts on the player's floor
   arena.fallFlash = null;
   arena.vmap = (window.VanishMaps ? VanishMaps.mapById(payload.mapId) : null);
@@ -3062,11 +3314,11 @@ function applyArenaStart(payload) {
     vanish:"Keep moving. A tile disappears shortly after anyone steps on it.",
     bombpass:"Touch another player to pass the bomb. The fuse timer is hidden!",
     fire:"Move through the maze. Press BOMB to blast crates and rivals!",
-    racing:"UP accelerates, DOWN brakes, LEFT/RIGHT steer. Complete 3 laps!",
+    racing:"Phone: hold GAS and steer with the joystick. Desktop: arrows/WASD. Complete 3 laps!",
     flappy:"Tap FLAP or press SPACE to guide your dragon between the pointy rocks. Furthest wins!",
     runner:"Your character runs automatically. Press JUMP or SPACE to clear the wilderness hazards!",
     painter:"RUN ACROSS TILES TO PAINT THEM. You can repaint rival territory—largest area wins!",
-    pong:"Move LEFT and RIGHT to defend your side. Miss three balls and you’re out!"
+    pong:"Your paddle is always at the bottom. Move left and right—three misses and you’re out!"
   };
   $("arena-title").textContent = names[payload.mode];
   $("arena-hint").textContent = hints[payload.mode];
@@ -3075,8 +3327,15 @@ function applyArenaStart(payload) {
     (payload.mode === "vanish" ? "DON’T STOP!" : payload.mode==="fire" ? "BOMB ARENA" :
       payload.mode==="racing" ? "3 LAPS" : payload.mode==="flappy" ? "FLY THE CANYON" : payload.mode==="runner" ? "RUN WILD!" : payload.mode==="painter" ? "PAINT EVERYTHING!" : payload.mode==="pong" ? "♥ ♥ ♥" : "WATCH THE SIGN");
   $("arena-jump").textContent=payload.mode==="fire"?"BOMB":payload.mode==="racing"?"HORN":payload.mode==="flappy"?"FLAP":"JUMP";
+  $("arena-controls").classList.toggle("racing-controls",payload.mode==="racing");
+  $("arena-controls").classList.toggle("runner-controls",payload.mode==="runner");
+  $("race-mobile-pedals").classList.toggle("hidden",payload.mode!=="racing");
+  $("arena-roll").classList.toggle("hidden",payload.mode!=="runner");
+  $("arena-joystick").setAttribute("aria-label",payload.mode==="racing"?"Steering joystick":"Movement joystick");
+  const pongAxis=payload.mode==="pong"?pongControlAxis():null;
   document.querySelectorAll("[data-arena]").forEach((button)=>{
-    const hide=payload.mode==="flappy"||(payload.mode==="runner"&&button.dataset.arena!=="down")||(payload.mode==="pong"&&!["left","right"].includes(button.dataset.arena));
+    const pongKeys=pongAxis?.axis==="vertical"?["up","down"]:["left","right"];
+    const hide=payload.mode==="flappy"||payload.mode==="runner"||(payload.mode==="pong"&&!pongKeys.includes(button.dataset.arena));
     button.classList.toggle("hidden",hide);
     if(button.dataset.arena==="down")button.textContent=payload.mode==="runner"?"ROLL":"▼";
   });
@@ -3102,8 +3361,13 @@ function updateArenaPlayers(players) {
       if (arena.player && Number.isFinite(p.lap)) arena.player.lap=p.lap;
       if (arena.player && Number.isFinite(p.checkpoint)) arena.player.checkpoint=p.checkpoint;
       if (arena.player && p.upgrades) arena.player.upgrades=p.upgrades;
-      if (arena.mode==="racing"&&arena.player&&!arena.player.crashVisual&&Number.isFinite(p.x)&&Math.hypot(p.x-arena.player.x,p.y-arena.player.y)>6){
-        arena.player.x+=(p.x-arena.player.x)*.45;arena.player.y+=(p.y-arena.player.y)*.45;
+      if(arena.player&&Number.isFinite(p.x)&&Number.isFinite(p.y)&&
+          (!Number.isFinite(arena.player.x)||!Number.isFinite(arena.player.y)||Math.hypot(p.x-arena.player.x,p.y-arena.player.y)>120)){
+        arena.player.x=p.x;arena.player.y=p.y;arena.player.vx=0;arena.player.vy=0;
+        arena.player.lastSafeX=p.x;arena.player.lastSafeY=p.y;
+      }
+      if (arena.mode==="racing"&&arena.player&&!arena.player.crashVisual&&Number.isFinite(p.x)&&Math.hypot(p.x-arena.player.x,p.y-arena.player.y)>28){
+        arena.player.x+=(p.x-arena.player.x)*.12;arena.player.y+=(p.y-arena.player.y)*.12;
       }
       if(["flappy","runner"].includes(arena.mode)&&arena.player&&Number.isFinite(p.y)){
         arena.player.y+=(p.y-arena.player.y)*.22;
@@ -3121,31 +3385,56 @@ function updateArenaPlayers(players) {
       if(arena.mode==="painter"&&arena.player)arena.player.painterStunnedUntil=p.painterStunnedUntil||0;
     } else {
       const old=arena.players.get(p.playerId);
-      arena.players.set(p.playerId,old?{...old,...p,tx:p.x,ty:p.y,x:old.x,y:old.y}:{...p,tx:p.x,ty:p.y});
+      if(!Number.isFinite(p.x)||!Number.isFinite(p.y))continue;
+      if(old){
+        const gap=Math.hypot(p.x-old.x,p.y-old.y);
+        // Nearby packets are animated. A large discrepancy is a stale render
+        // position (often after startup/wake), so use the authoritative point
+        // immediately instead of leaving the avatar clipped off-screen.
+        const snap=!Number.isFinite(old.x)||!Number.isFinite(old.y)||gap>96;
+        arena.players.set(p.playerId,{...old,...p,tx:p.x,ty:p.y,x:snap?p.x:old.x,y:snap?p.y:old.y});
+      }else arena.players.set(p.playerId,{...p,tx:p.x,ty:p.y});
     }
   }
   const own=(players||[]).find((p)=>p.playerId===state.selfId);
   if(own) arena.players.set(state.selfId,own);
+}
+function stabilizeArenaPosition(p){
+  if(Number.isFinite(p.x)&&Number.isFinite(p.y)){
+    p.lastSafeX=p.x;p.lastSafeY=p.y;return true;
+  }
+  p.x=Number.isFinite(p.lastSafeX)?p.lastSafeX:360;
+  p.y=Number.isFinite(p.lastSafeY)?p.lastSafeY:220;
+  p.vx=0;p.vy=0;p.speed=0;p.impactVx=0;p.impactVy=0;
+  return false;
 }
 function stepArena(dt,now) {
   for(const [id,p] of arena.players){
     if(id===state.selfId||!Number.isFinite(p.tx))continue;
     const blend=1-Math.pow(.001,dt);
     const beforeX=p.x,beforeY=p.y;
-    p.x+=(p.tx-p.x)*blend;p.y+=(p.ty-p.y)*blend;
+    let moveX=(p.tx-p.x)*blend,moveY=(p.ty-p.y)*blend;
+    const moveLength=Math.hypot(moveX,moveY),maxStep=(arena.mode==="racing"?520:340)*dt;
+    if(moveLength>maxStep){moveX*=maxStep/moveLength;moveY*=maxStep/moveLength;}
+    p.x+=moveX;p.y+=moveY;
     p.renderVx=(p.x-beforeX)/Math.max(.001,dt);
     p.renderVy=(p.y-beforeY)/Math.max(.001,dt);
     checkVisualColorDanger(id,p,now);
   }
   if(!arena.player||arena.done) return;
   const p=arena.player;
+  stabilizeArenaPosition(p);
   if(arena.mode==="painter"&&Date.now()<(p.painterStunnedUntil||0)){
     p.vx=0;p.vy=0;return;
   }
   if(arena.mode==="pong"){
-    const direction=(arena.keys.right?1:0)-(arena.keys.left?1:0);
+    const control=pongControlAxis();
+    const screenDirection=control.axis==="horizontal"
+      ? (arena.keys.right?1:0)-(arena.keys.left?1:0)
+      : (arena.keys.down?1:0)-(arena.keys.up?1:0);
+    const direction=screenDirection*control.sign;
     p.paddleT=Math.max(0,Math.min(1,(p.paddleT??.5)+direction*dt*1.45));
-    if(now-arena.lastSent>45){arena.lastSent=now;socket.emit("arena:position",{x:p.paddleT,y:0});}
+    if(now-arena.lastSent>45){arena.lastSent=now;socket.emit("arena:position",{instanceId:arena.instanceId,x:p.paddleT,y:0});}
     return;
   }
   if(arena.mode==="flappy"){
@@ -3169,7 +3458,8 @@ function stepArena(dt,now) {
     }
     p.groundY=floor;
     if(p.y>=floor){p.y=floor;p.vy=0;}
-    if(now-arena.lastSent>70){arena.lastSent=now;socket.emit("arena:position",{x:0,y:0,roll:p.rolling});}
+    stabilizeArenaPosition(p);
+    if(now-arena.lastSent>70){arena.lastSent=now;socket.emit("arena:position",{instanceId:arena.instanceId,x:0,y:0,roll:p.rolling});}
     return;
   }
   if(arena.mode==="racing"){
@@ -3209,6 +3499,7 @@ function stepArena(dt,now) {
         p.speed*=.88;p.localRaceBumpUntil=now+180;
       }
     }
+    stabilizeArenaPosition(p);
     const edgeDistance=raceTrackDistance(track,p.x,p.y);
     const roadLimit=track.width/2-3;
     if(edgeDistance>roadLimit){
@@ -3221,13 +3512,13 @@ function stepArena(dt,now) {
       p.impactVy=(p.impactVy||0)*Math.exp(-dt*4);
       if(now-p.offTrackSince>260){
         p.crashVisual={started:now,from:{x:p.x,y:p.y},respawn:{x:p.x,y:p.y,angle:p.angle},pending:true};
-        p.offTrackSince=null;p.speed=0;socket.emit("arena:crash");return;
+        p.offTrackSince=null;p.speed=0;socket.emit("arena:crash",{instanceId:arena.instanceId});return;
       }
     }else{
       p.offTrackSince=null;
     }
     p.vx=Math.cos(p.angle)*p.speed;p.vy=Math.sin(p.angle)*p.speed;
-    if(now-arena.lastSent>45){arena.lastSent=now;socket.emit("arena:position",{x:p.x,y:p.y,angle:p.angle});}
+    if(now-arena.lastSent>30){arena.lastSent=now;socket.emit("arena:position",{instanceId:arena.instanceId,x:p.x,y:p.y,angle:p.angle});}
     return;
   }
   // Snappy, precise control: ease velocity toward the target and stop quickly.
@@ -3248,10 +3539,12 @@ function stepArena(dt,now) {
     p.y=fireBlocked(p.x,nextY)?oldPY:nextY;
     if(p.x===oldPX)p.vx*=.18;if(p.y===oldPY)p.vy*=.18;
   }
+  stabilizeArenaPosition(p);
   checkVisualColorDanger(state.selfId,p,now);
   if(Date.now()>=(p.jumpingUntil||0)){
     for(const [id,other] of arena.players){
       if(id===state.selfId||other.eliminated||Date.now()<(other.jumpingUntil||0))continue;
+      if(arena.mode==="fire")continue;
       if(arena.mode==="vanish"&&(other.layer||0)!==(arena.player.layer||0))continue; // only bump on the same floor
       const dx=p.x-other.x,dy=p.y-other.y,dist=Math.hypot(dx,dy),minimum=36;
       if(dist>0&&dist<minimum){
@@ -3273,8 +3566,8 @@ function stepArena(dt,now) {
     if(q.visualLayer==null)q.visualLayer=q.layer||0;
     q.visualLayer+=((q.layer||0)-q.visualLayer)*Math.min(1,dt*5.5);
   }
-  if(now-arena.lastSent>45){
-    arena.lastSent=now;socket.emit("arena:position",{x:p.x,y:p.y});
+  if(now-arena.lastSent>(arena.mode==="painter"?30:45)){
+    arena.lastSent=now;socket.emit("arena:position",{instanceId:arena.instanceId,x:p.x,y:p.y});
   }
 }
 function checkVisualColorDanger(playerId,p,now){
@@ -3430,7 +3723,17 @@ function drawRaceArena(now){
   trace();ctx.strokeStyle="#d1d5db";ctx.lineWidth=track.width+10;ctx.stroke();
   trace();ctx.strokeStyle="#374151";ctx.lineWidth=track.width;ctx.stroke();
   trace();ctx.setLineDash([16,14]);ctx.strokeStyle="rgba(255,255,255,.65)";ctx.lineWidth=3;ctx.stroke();ctx.setLineDash([]);
-  const start=track.checkpoints.at(-1);for(let i=0;i<8;i++){ctx.fillStyle=i%2?"#fff":"#111";ctx.fillRect(start[0]-32+i*8,start[1]-18,8,36);}
+  // Visible checkpoint gates. The final gate is the finish line and spans the
+  // complete road width instead of being a small decoration near its centre.
+  track.checkpoints.forEach((gate,index)=>{
+    const {nx,ny}=raceGateNormal(track,gate);
+    const half=track.width/2+3,active=index===(arena.player?.checkpoint||0);
+    ctx.save();ctx.strokeStyle=index===track.checkpoints.length-1?"#fff":(active?"#facc15":"rgba(56,189,248,.55)");
+    ctx.lineWidth=index===track.checkpoints.length-1?8:4;ctx.setLineDash(index===track.checkpoints.length-1?[8,8]:[5,7]);
+    ctx.beginPath();ctx.moveTo(gate[0]-nx*half,gate[1]-ny*half);ctx.lineTo(gate[0]+nx*half,gate[1]+ny*half);ctx.stroke();ctx.restore();
+    if(index<track.checkpoints.length-1){ctx.fillStyle=active?"#fef08a":"#bae6fd";ctx.font="900 10px sans-serif";ctx.textAlign="center";ctx.fillText(String(index+1),gate[0],gate[1]-10);}
+  });
+  const start=track.checkpoints.at(-1);
   // Finish flags stay visible; the first finisher launches a brief celebration.
   for(const side of [-1,1]){
     const fx=start[0]+side*39,fy=start[1]-28;
@@ -3587,7 +3890,10 @@ function drawRunnerArena(now){
   }
   // Fast foreground grass and stepping stones.
   ctx.fillStyle=theme.ground;ctx.fillRect(0,326,720,19);
-  for(let i=0;i<20;i++){const x=((i*47-progress*.72)%780+780)%780-30;ctx.fillStyle=theme.grass[i%2];ctx.fillRect(x,318,3,10);}
+  // Foreground details share the exact world speed of hazards, coins and
+  // platforms. Slower motion here made the runner look detached from the map.
+  for(let i=0;i<20;i++){const x=((i*47-progress)%780+780)%780-30;ctx.fillStyle=theme.grass[i%2];ctx.fillRect(x,318,3,10);}
+  for(let i=0;i<9;i++){const x=((i*103+26-progress)%850+850)%850-65;ctx.fillStyle="rgba(226,232,240,.24)";ctx.beginPath();ctx.ellipse(x,337,24,5,0,0,Math.PI*2);ctx.fill();}
   const drawHazard=(obstacle)=>{
     const x=obstacle.x-progress;if(x<-60||x>780)return;
     const ground=326,h=obstacle.h,w=obstacle.w;
@@ -3652,9 +3958,11 @@ function drawPongArena(now){
   const bg=ctx.createRadialGradient(360,220,40,360,220,390);bg.addColorStop(0,"#172554");bg.addColorStop(1,"#020617");
   ctx.fillStyle=bg;ctx.fillRect(0,0,720,440);
   const sides=arena.pongSides||4,apothem=174,radius=apothem/Math.cos(Math.PI/sides);
+  const ownSide=arena.playerSides?.[state.selfId]??0,viewRotation=Math.PI-ownSide*Math.PI*2/sides;
+  const viewPoint=(x,y)=>{const dx=x-360,dy=y-220,c=Math.cos(viewRotation),s=Math.sin(viewRotation);return [360+dx*c-dy*s,220+dx*s+dy*c];};
   const vertices=Array.from({length:sides},(_,i)=>{
     const angle=-Math.PI/2-Math.PI/sides+i*Math.PI*2/sides;
-    return [360+Math.cos(angle)*radius,220+Math.sin(angle)*radius];
+    return viewPoint(360+Math.cos(angle)*radius,220+Math.sin(angle)*radius);
   });
   ctx.beginPath();ctx.moveTo(...vertices[0]);for(let i=1;i<sides;i++)ctx.lineTo(...vertices[i]);ctx.closePath();
   ctx.fillStyle="rgba(30,64,175,.18)";ctx.fill();ctx.strokeStyle="rgba(96,165,250,.35)";ctx.lineWidth=5;ctx.stroke();
@@ -3664,13 +3972,13 @@ function drawPongArena(now){
     const ownerId=owners[side],remote=arena.players.get(ownerId),p=ownerId===state.selfId?arena.player:remote;
     const info=state.room?.players?.find(q=>q.id===ownerId),alive=ownerId&&(arena.lives[ownerId]||0)>0;
     const sideLength=2*apothem*Math.tan(Math.PI/sides),offset=((p?.paddleT??.5)-.5)*Math.max(35,sideLength-105);
-    const cx=360+nx*apothem+tx*offset,cy=220+ny*apothem+ty*offset;
+    const [cx,cy]=viewPoint(360+nx*apothem+tx*offset,220+ny*apothem+ty*offset);
     if(ownerId){
-      ctx.save();ctx.translate(cx,cy);ctx.rotate(angle+Math.PI/2);
+      ctx.save();ctx.translate(cx,cy);ctx.rotate(angle+viewRotation+Math.PI/2);
       ctx.shadowColor=alive?(info?.avatar?.color||"#38bdf8"):"#475569";ctx.shadowBlur=alive?16:0;
       ctx.fillStyle=alive?(info?.avatar?.color||"#38bdf8"):"#334155";
       ctx.beginPath();ctx.roundRect(-44,-8,88,16,8);ctx.fill();ctx.restore();
-      const lx=360+nx*(apothem+28),ly=220+ny*(apothem+28);
+      const [lx,ly]=viewPoint(360+nx*(apothem+28),220+ny*(apothem+28));
       ctx.fillStyle="#fff";ctx.font="bold 11px sans-serif";ctx.textAlign="center";
       ctx.fillText(ownerId===state.selfId?"You":(remote?.name||info?.name||""),lx,ly-2);
       ctx.fillStyle="#fb7185";ctx.font="14px sans-serif";ctx.fillText("♥".repeat(arena.lives[ownerId]||0),lx,ly+14);
@@ -3680,7 +3988,7 @@ function drawPongArena(now){
     const age=now-effect.started;if(age>1050)return false;
     const side=Number.isInteger(effect.side)?effect.side:(arena.playerSides[effect.playerId]||0);
     const angle=-Math.PI/2+side*Math.PI*2/sides,nx=Math.cos(angle),ny=Math.sin(angle);
-    const x=360+nx*(apothem-38),y=220+ny*(apothem-38),progress=age/1050;
+    const [x,y]=viewPoint(360+nx*(apothem-38),220+ny*(apothem-38));const progress=age/1050;
     ctx.save();ctx.globalAlpha=1-progress;ctx.translate(x,y);ctx.scale(1+progress*.8,1+progress*.8);
     ctx.fillStyle="#fb7185";ctx.font="900 24px sans-serif";ctx.textAlign="center";ctx.fillText("−1 ♥",0,0);
     ctx.strokeStyle="#fecdd3";ctx.lineWidth=3;
@@ -3697,6 +4005,7 @@ function drawPongArena(now){
       if(projection>maxProjection){maxProjection=projection;edgeNx=nx;edgeNy=ny;}
     }
     if(maxProjection>apothem+8){const excess=maxProjection-(apothem+8);x-=edgeNx*excess;y-=edgeNy*excess;}
+    [x,y]=viewPoint(x,y);
     const glow=ctx.createRadialGradient(x,y,2,x,y,18);glow.addColorStop(0,"#fff");glow.addColorStop(.35,"#fde047");glow.addColorStop(1,"rgba(250,204,21,0)");
     ctx.fillStyle=glow;ctx.beginPath();ctx.arc(x,y,18,0,Math.PI*2);ctx.fill();
     ctx.fillStyle="#fff";ctx.beginPath();ctx.arc(x,y,8,0,Math.PI*2);ctx.fill();
@@ -4021,23 +4330,23 @@ function applyColorSignal({safeColor,dangerAt,scrambleUntil,cycle,tileLayout}) {
 function setArenaKey(key,down){arena.keys[key]=down;}
 function jumpArena(){
   if(currentScreen!=="arena"||arena.done||!arena.player)return;
-  if(arena.mode==="racing"){sound.beep(440,.08,"square",.025);return;}
+  if(arena.mode==="racing"){socket.emit("arena:jump",{instanceId:arena.instanceId});return;}
   const now=Date.now();
   if(arena.mode==="flappy"){
     if(now-arena.lastJumpAt<95)return;
-    arena.lastJumpAt=now;arena.player.vy=-285;socket.emit("arena:jump");
+    arena.lastJumpAt=now;arena.player.vy=-285;socket.emit("arena:jump",{instanceId:arena.instanceId});
     sound.beep(520,.045,"sine",.018);return;
   }
   if(arena.mode==="runner"){
     if(now-arena.lastJumpAt<180||arena.player.y<324)return;
-    arena.lastJumpAt=now;arena.player.vy=-420;socket.emit("arena:jump");
+    arena.lastJumpAt=now;arena.player.vy=-420;socket.emit("arena:jump",{instanceId:arena.instanceId});
     sound.beep(360,.06,"square",.022);return;
   }
   if(now-arena.lastJumpAt<1000)return;
   arena.lastJumpAt=now;
-  if(arena.mode==="fire"){socket.emit("arena:jump");sound.beep(120,.08,"square",.03);return;}
+  if(arena.mode==="fire"){socket.emit("arena:jump",{instanceId:arena.instanceId});sound.beep(120,.08,"square",.03);return;}
   arena.player.jumpingUntil=now+620;
-  socket.emit("arena:jump");
+  socket.emit("arena:jump",{instanceId:arena.instanceId});
 }
 window.addEventListener("keydown",(e)=>{
   if(currentScreen!=="arena")return;
@@ -4054,7 +4363,38 @@ document.querySelectorAll("[data-arena]").forEach((b)=>{
   b.addEventListener("pointerdown",down);b.addEventListener("pointerup",up);
   b.addEventListener("pointercancel",up);b.addEventListener("pointerleave",up);
 });
-$("arena-jump").addEventListener("click",jumpArena);
+$("arena-jump").addEventListener("pointerdown",(event)=>{event.preventDefault();jumpArena();});
+const arenaRoll=$("arena-roll");
+if(arenaRoll){
+  const stopRoll=(event)=>{event.preventDefault();setArenaKey("down",false);};
+  arenaRoll.addEventListener("pointerdown",(event)=>{event.preventDefault();arenaRoll.setPointerCapture?.(event.pointerId);setArenaKey("down",true);});
+  arenaRoll.addEventListener("pointerup",stopRoll);arenaRoll.addEventListener("pointercancel",stopRoll);arenaRoll.addEventListener("lostpointercapture",stopRoll);
+}
+const arenaJoystick=$("arena-joystick"),arenaJoystickKnob=arenaJoystick?.querySelector("span");
+let arenaJoystickPointer=null;
+function resetArenaJoystick(){
+  arenaJoystickPointer=null;for(const key of (arena.mode==="racing"?["left","right"]:["left","right","up","down"]))setArenaKey(key,false);
+  if(arenaJoystickKnob)arenaJoystickKnob.style.transform="translate(0,0)";
+}
+function moveArenaJoystick(e){
+  if(e.pointerId!==arenaJoystickPointer)return;e.preventDefault();
+  const r=arenaJoystick.getBoundingClientRect(),dx=e.clientX-(r.left+r.width/2),dy=e.clientY-(r.top+r.height/2),length=Math.hypot(dx,dy),limit=31;
+  const scale=length>limit?limit/length:1,x=dx*scale,y=dy*scale,dead=8;
+  arenaJoystickKnob.style.transform=`translate(${x}px,${y}px)`;
+  setArenaKey("left",x<-dead);setArenaKey("right",x>dead);
+  if(arena.mode!=="racing"){setArenaKey("up",y<-dead);setArenaKey("down",y>dead);}
+}
+if(arenaJoystick){
+  arenaJoystick.addEventListener("pointerdown",(e)=>{arenaJoystickPointer=e.pointerId;arenaJoystick.setPointerCapture(e.pointerId);moveArenaJoystick(e);});
+  arenaJoystick.addEventListener("pointermove",moveArenaJoystick);
+  arenaJoystick.addEventListener("pointerup",resetArenaJoystick);arenaJoystick.addEventListener("pointercancel",resetArenaJoystick);
+}
+document.querySelectorAll("[data-race-pedal]").forEach((button)=>{
+  const key=button.dataset.racePedal;
+  const release=(event)=>{event.preventDefault();setArenaKey(key,false);};
+  button.addEventListener("pointerdown",(event)=>{event.preventDefault();button.setPointerCapture?.(event.pointerId);setArenaKey(key,true);});
+  button.addEventListener("pointerup",release);button.addEventListener("pointercancel",release);button.addEventListener("lostpointercapture",release);
+});
 
 // ===================== CHOOSE A DOOR =====================
 const doors={
@@ -4334,7 +4674,10 @@ function renderSurvivalResults(payload) {
   const labels={colorfloor:"Color Twister",vanish:"Vanishing Grid",bombpass:"Bomb Pass",fire:"Playing with Fire",flappy:"Dragon Rider",runner:"Wild Run",pong:"Polygon Pong",doors:"Choose a Door"};
   $("results-caption").textContent=labels[payload.mode]||"Survival";
   const survivors=payload.ranking.filter((r)=>r.survived).length;
-  $("correct-answer").textContent=survivors?`${survivors} survived!`:"Nobody survived!";
+  const distanceWinner=["flappy","runner"].includes(payload.mode)?payload.ranking[0]:null;
+  $("correct-answer").textContent=distanceWinner
+    ? `${distanceWinner.name} went furthest — ${distanceWinner.distance||0} m!`
+    : (survivors?`${survivors} survived!`:"Nobody survived!");
   $("results-head").classList.remove("hidden");$("results-timeline").classList.add("hidden");
   const list=$("result-list");list.innerHTML="";
   payload.ranking.forEach((r,i)=>{
@@ -4370,14 +4713,14 @@ function renderRacingResults(payload){
 function renderCurlingResults(payload){
   cancelAnimationFrame(curlingVisual.raf);
   $("results-caption").textContent="Curling";
-  $("correct-answer").textContent="Three stones each — highest zone total wins";
+  $("correct-answer").textContent="Most points wins";
   $("results-head").classList.remove("hidden");$("results-timeline").classList.add("hidden");
   const list=$("result-list");list.innerHTML="";
   payload.ranking.forEach((r,i)=>{
     const li=document.createElement("li");if(r.playerId===state.selfId)li.classList.add("self");
     li.innerHTML=`<span class="rank">${i===0?"🥌":i+1}</span><div class="r-main"><div class="r-top">`+
       `<span class="r-name">${avatarHtml(r.avatar)} ${esc(r.name)}</span>`+
-      `<span class="r-guess">${r.score||0} zone points</span></div></div>`+
+      `<span class="r-guess">${r.score||0} pts</span></div></div>`+
       `<span class="r-points ${r.pointsAwarded?"":"zero"}">+${r.pointsAwarded}</span>`;
     list.appendChild(li);
   });
@@ -4423,7 +4766,7 @@ function updateResultsHostControls(isFinalRound) {
   const arc = state.room && state.room.arcade;
   const moreLegs = arc && arc.legIndex < arc.totalLegs - 1;
   const label = isFinalRound
-    ? (moreLegs ? "Next game →" : "See final results")
+    ? (arc?.battle ? "Award the win →" : (moreLegs ? "Next game →" : "See final results"))
     : "Next round";
   if (state.isHost) {
     $("next-btn").textContent = label;
@@ -4441,7 +4784,7 @@ function renderFinal(payload, { silent = false } = {}) {
   const standings = payload.standings || [];
   const top = standings.slice(0, 3);
 
-  $("final-kicker").textContent = "FINAL RESULTS";
+  $("final-kicker").textContent = payload.battle ? "BATTLE CHAMPION" : "FINAL RESULTS";
   $("final-announce").textContent = "…";
   $("winner-score").textContent = "";
   $("podium").innerHTML = "";
@@ -4483,7 +4826,7 @@ function renderFinal(payload, { silent = false } = {}) {
       if (!silent) sound.beep(place === 1 ? 900 : 600, 0.15, "triangle");
       if (place === 1) {
         $("final-kicker").textContent = payload.winner ? "WINNER" : "WINNERS";
-        $("winner-score").textContent = `${fmt(st.s.score)} points`;
+        $("winner-score").textContent = payload.battle ? `${fmt(st.s.score)} minigame wins` : `${fmt(st.s.score)} points`;
         if (!silent) {
           launchConfetti(); sound.chord([523, 659, 784, 1047]);
           const myIdx = standings.findIndex((s) => s.playerId === state.selfId);

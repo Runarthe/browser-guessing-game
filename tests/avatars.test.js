@@ -26,3 +26,20 @@ test("players carry a validated avatar", () => {
   const join = rm.joinRoom("s2", room.code, "Anna", { emoji: "nope", color: "#000000" });
   assert.ok(AVATAR_EMOJIS.includes(room.players["s2"].avatar.emoji));
 });
+
+test("room players receive unique colors and can change appearance in the lobby", () => {
+  const rm = new RoomManager();
+  const selected = { emoji: AVATAR_EMOJIS[0], color: AVATAR_COLORS[0] };
+  const { room } = rm.createRoom("s1", "Host", selected);
+  rm.joinRoom("s2", room.code, "Friend", selected);
+  assert.notEqual(room.players.s1.avatar.color, room.players.s2.avatar.color);
+
+  const changed = rm.updateAvatar(room, "s2", { emoji: AVATAR_EMOJIS[4], color: AVATAR_COLORS[4] });
+  assert.equal(changed.ok, true);
+  assert.equal(room.players.s2.avatar.emoji, AVATAR_EMOJIS[4]);
+  assert.equal(room.players.s2.avatar.color, AVATAR_COLORS[4]);
+
+  const collision = rm.updateAvatar(room, "s2", selected);
+  assert.equal(collision.colorAdjusted, true);
+  assert.notEqual(room.players.s1.avatar.color, room.players.s2.avatar.color);
+});

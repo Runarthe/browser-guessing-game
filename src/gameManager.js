@@ -25,13 +25,15 @@ const BOMB_SURVIVOR_POINTS = 50;
 const RACE_TRACKS = [
   {
     id:"square",
+    width:92,
     points:[[130,90],[590,90],[640,140],[640,320],[590,370],[130,370],[80,320],[80,140]],
-    checkpoints:[[640,140],[590,370],[80,320],[130,90]]
+    checkpoints:[[640,230],[360,370],[80,230],[360,90]]
   },
   {
     id:"swing",
+    width:82,
     points:[[110,100],[310,70],[520,105],[630,190],[540,260],[630,350],[390,375],[250,310],[90,350],[120,220],[260,205]],
-    checkpoints:[[630,190],[630,350],[250,310],[120,220],[110,100]]
+    checkpoints:[[575,148],[585,305],[320,343],[105,285],[210,85]]
   }
 ];
 
@@ -39,6 +41,21 @@ function distanceToSegment(px,py,x1,y1,x2,y2){
   const dx=x2-x1,dy=y2-y1,length=dx*dx+dy*dy;
   const t=length?Math.max(0,Math.min(1,((px-x1)*dx+(py-y1)*dy)/length)):0;
   return Math.hypot(px-(x1+t*dx),py-(y1+t*dy));
+}
+function raceGateNormal(track,gate){
+  let best={distance:Infinity,nx:0,ny:1};
+  for(let i=0;i<track.points.length;i++){
+    const a=track.points[i],b=track.points[(i+1)%track.points.length],dx=b[0]-a[0],dy=b[1]-a[1],length=Math.hypot(dx,dy)||1;
+    const distance=distanceToSegment(gate[0],gate[1],a[0],a[1],b[0],b[1]);
+    if(distance<best.distance)best={distance,nx:-dy/length,ny:dx/length};
+  }
+  return best;
+}
+function segmentsIntersect(ax,ay,bx,by,cx,cy,dx,dy){
+  const cross=(px,py,qx,qy,rx,ry)=>(qx-px)*(ry-py)-(qy-py)*(rx-px);
+  const a=cross(ax,ay,bx,by,cx,cy),b=cross(ax,ay,bx,by,dx,dy);
+  const c=cross(cx,cy,dx,dy,ax,ay),d=cross(cx,cy,dx,dy,bx,by);
+  return ((a<=0&&b>=0)||(a>=0&&b<=0))&&((c<=0&&d>=0)||(c>=0&&d<=0));
 }
 
 /** Vanishing Grid (Fall-Guys style) — a finite square platform + stacked floors.
@@ -173,9 +190,14 @@ class GameManager {
     }
 
     room.arcade = settings.arcade && playlist.length > 1
-      ? { playlist, legIndex: 0 }
+      ? { playlist, legIndex: -1, battle: true, target: settings.battleTarget ?? 5,
+          wins: {}, spinnerIndex: 0, spinnerId: connected[0].id, awaitingSpin: true,
+          pendingMode: null, previousMode: null, scoresAtLegStart: {} }
       : null;
-    room.currentMode = playlist[0];
+    room.currentMode = room.arcade ? null : playlist[0];
+    // Curling is a compact best-of-two-set match. Each set still gives every
+    // player the full three stones.
+    if (!room.arcade && room.currentMode === "curling") room.totalRounds = Math.min(2, room.totalRounds);
 
     // Reset scores ONCE for the whole session (arcade scores carry across legs).
     for (const player of Object.values(room.players)) {
@@ -185,8 +207,71 @@ class GameManager {
     }
     room.lastActivity = Date.now();
 
-    this.beginMode(room);
+    if (room.arcade?.battle) {
+      for (const player of connected) room.arcade.wins[player.id] = 0;
+      this.showBattleWheel(room, { first: true });
+    } else {
+      this.beginMode(room);
+    }
     return { ok: true };
+  }
+
+  battleStandings(room) {
+    const wins = room.arcade?.wins ?? {};
+    return Object.values(room.players)
+      .map((p) => ({ playerId: p.id, name: p.name, avatar: p.avatar,
+        wins: wins[p.id] ?? 0, score: wins[p.id] ?? 0, points: p.score ?? 0 }))
+      .sort((a, b) => b.wins - a.wins || b.points - a.points);
+  }
+
+  showBattleWheel(room, extra = {}) {
+    this.disarmTimer(room);
+    const battle = room.arcade;
+    const connected = this.roomManager.connectedPlayers(room);
+    if (!battle || !connected.length) return;
+    battle.spinnerIndex %= connected.length;
+    battle.spinnerId = connected[battle.spinnerIndex].id;
+    battle.awaitingSpin = true;
+    battle.pendingMode = null;
+    room.state = GAME_STATES.INTERMISSION;
+    room.deadline = null;
+    const payload = { battle: true, awaitingSpin: true, first: !!extra.first,
+      spinnerId: battle.spinnerId, spinnerName: room.players[battle.spinnerId]?.name,
+      options: battle.playlist, target: battle.target, wins: battle.wins,
+      standings: this.battleStandings(room), lastWinners: extra.lastWinners ?? [] };
+    room.lastIntermission = payload;
+    this.emitRoom(room.code, "arcade:intermission", payload);
+    if (room.players[battle.spinnerId]?.isBot) {
+      const botWheelTimer = this.setTimer(() => this.spinBattleWheel(room, battle.spinnerId), 1200);
+      this.timers.set(room.code, botWheelTimer);
+    }
+  }
+
+  spinBattleWheel(room, socketId) {
+    const battle = room?.arcade;
+    if (!room || room.state !== GAME_STATES.INTERMISSION || !battle?.battle || !battle.awaitingSpin) {
+      return { ok: false, error: "The wheel is not ready to spin." };
+    }
+    if (socketId !== battle.spinnerId) return { ok: false, error: "It is another player's turn to spin." };
+    let choices = battle.playlist.filter((m) => m !== battle.previousMode);
+    if (!choices.length) choices = battle.playlist.slice();
+    const selectedMode = choices[Math.floor(Math.random() * choices.length)];
+    battle.awaitingSpin = false;
+    battle.pendingMode = selectedMode;
+    this.emitRoom(room.code, "battle:wheel-result", { selectedMode, options: battle.playlist, spinnerId: socketId });
+    this.disarmTimer(room);
+    const wheelTimer = this.setTimer(() => {
+      if (room.state !== GAME_STATES.INTERMISSION || battle.pendingMode !== selectedMode) return;
+      battle.legIndex += 1;
+      battle.previousMode = selectedMode;
+      battle.pendingMode = null;
+      room.currentMode = selectedMode;
+      battle.scoresAtLegStart = Object.fromEntries(Object.values(room.players).map((p) => [p.id, p.score ?? 0]));
+      this.emitRoom(room.code, "battle:started", { legIndex: battle.legIndex, mode: selectedMode });
+      this.beginMode(room);
+    }, 3400);
+    this.timers.set(room.code, wheelTimer);
+    return { ok: true, selectedMode };
   }
 
   /**
@@ -267,6 +352,21 @@ class GameManager {
    * intermission for the host to advance; otherwise finish the whole game.
    */
   finishMode(room, extra = {}) {
+    if (room.arcade?.battle) {
+      const battle = room.arcade;
+      const deltas = Object.values(room.players).map((p) => ({ id: p.id,
+        delta: (p.score ?? 0) - (battle.scoresAtLegStart[p.id] ?? 0) }));
+      const best = Math.max(0, ...deltas.map((d) => d.delta));
+      const winners = deltas.filter((d) => d.delta === best).map((d) => d.id);
+      winners.forEach((id) => { battle.wins[id] = (battle.wins[id] ?? 0) + 1; });
+      if (winners.some((id) => battle.wins[id] >= battle.target)) {
+        this.finishGame(room, { battle: true });
+        return;
+      }
+      battle.spinnerIndex += 1;
+      this.showBattleWheel(room, { lastWinners: winners });
+      return;
+    }
     if (room.arcade && room.arcade.legIndex < room.arcade.playlist.length - 1) {
       this.disarmTimer(room);
       room.state = GAME_STATES.INTERMISSION;
@@ -288,6 +388,7 @@ class GameManager {
   /** Host advances from an arcade intermission to the next mode. */
   startNextLeg(room, socketId) {
     if (!room) return { ok: false, error: "Room not found." };
+    if (room?.arcade?.battle) return this.spinBattleWheel(room, socketId);
     if (socketId !== room.hostId) {
       return { ok: false, error: "Only the host can start the next game." };
     }
@@ -1354,7 +1455,7 @@ class GameManager {
     drawing.guessed = {};
     drawing.strokes = [];
     room.state = GAME_STATES.QUESTION;
-    room.deadline = Date.now() + Math.max(this.roundDurationMs(room), 30000);
+    room.deadline = Date.now() + Math.max(this.roundDurationMs(room), 60000);
 
     const common = {
       mode: "drawing", roundNumber: room.roundIndex + 1, totalRounds: room.totalRounds,
@@ -1369,7 +1470,7 @@ class GameManager {
       if (current?.drawing && this.mode(current) === "drawing" && current.state === GAME_STATES.QUESTION) {
         this.finishDrawingRound(current);
       }
-    }, Math.max(this.roundDurationMs(room), 30000)));
+    }, Math.max(this.roundDurationMs(room), 60000)));
   }
 
   drawingStroke(room, socketId, stroke) {
@@ -1487,10 +1588,10 @@ class GameManager {
     const pos = room.pushy.positions?.[socketId];
     if (!pos || room.pushy.outcomes[socketId]) return { ok: true };
     const now = Date.now();
-    if (now - pos.updatedAt < 65) return { ok: true };
+    if (now - pos.updatedAt < 45) return { ok: true };
     const x = Number(raw.x), y = Number(raw.y), vx = Number(raw.vx), vy = Number(raw.vy);
     if (![x, y, vx, vy].every(Number.isFinite)) return { ok: false, error: "Invalid position." };
-    pos.x = Math.max(60, Math.min(660, x));
+    pos.x = Math.max(10, Math.min(660, x));
     pos.y = Math.max(25, Math.min(415, y));
     pos.vx = Math.max(-500, Math.min(500, vx));
     pos.vy = Math.max(-500, Math.min(500, vy));
@@ -1575,11 +1676,11 @@ class GameManager {
     const players = this.roomManager.connectedPlayers(room);
     const now = Date.now();
     const runnerCourse=mode==="runner"?this.makeRunnerCourse((now^room.roundIndex*2654435761^room.code.split("").reduce((n,c)=>n+c.charCodeAt(0),0))>>>0):null;
-    const duration = mode === "bombpass" ? 30000 : mode === "fire" ? 60000 : mode === "racing" ? 75000 : ["flappy","runner"].includes(mode) ? 600000 : mode === "painter" ? 42000 : mode === "pong" ? 60000 : 26000;
+    const duration = mode === "bombpass" ? 30000 : mode === "fire" ? 60000 : mode === "racing" ? 75000 : ["flappy","runner"].includes(mode) ? 600000 : mode === "painter" ? 42000 : mode === "pong" ? 60000 : mode === "vanish" ? 45000 : mode === "colorfloor" ? 42000 : 26000;
     // Vanishing Grid: pick a "map" (grid pattern + shape) for this round.
     const vmap = mode === "vanish" ? VanishMaps.pickVMap(now) : null;
     room.arena = {
-      mode, startedAt: now, deadline: now + duration, positions: {}, eliminated: {},
+      mode, instanceId:`${now}-${room.roundIndex}-${mode}`, startedAt: now, deadline: now + duration, positions: {}, eliminated: {},
       tiles: {}, cycle: -1, safeColor: 0, holderId: null, explodeAt: null,
       previousHolderId: null, passLockedUntil: 0, tileLayout: [],
       colorDangerAt: 0, colorScrambleUntil: 0, bumpCooldowns: {},
@@ -1639,6 +1740,7 @@ class GameManager {
       room.arena.positions[p.id] = {
         x, y, vx: 0, vy: 0, updatedAt: 0, jumpUntil: 0, jumpCooldownUntil: 0, layer: 0,
         angle: mode==="racing"?spawnAngle:null, lap:0, checkpoint:0,paddleT:.5,
+        spawnX:mode==="racing"?x:null,spawnY:mode==="racing"?y:null,spawnAngle:mode==="racing"?spawnAngle:null,
         distance:0,coins:0,collectedCoins:{},rolling:false,perfects:0,boostUntil:0,groundY:326
       };
       room.arena.upgrades[p.id]={range:2,bombs:1,speed:0};
@@ -1662,7 +1764,7 @@ class GameManager {
   arenaPublic(room) {
     const a = room.arena;
     return {
-      mode: a.mode, roundNumber: room.roundIndex + 1, totalRounds: room.totalRounds,
+      mode: a.mode, instanceId:a.instanceId, roundNumber: room.roundIndex + 1, totalRounds: room.totalRounds,
       deadline: a.deadline, startedAt: a.startedAt, safeColor: a.safeColor, mapId: a.mapId,
       cycle: a.cycle, holderId: a.holderId, tileLayout: a.tileLayout,
       dangerAt: a.colorDangerAt, scrambleUntil: a.colorScrambleUntil,
@@ -1837,7 +1939,7 @@ class GameManager {
         let hit=pos.y<18||pos.y>422;
         if(!hit)for(const obstacle of a.obstacles){
           const screenX=obstacle.x-progress;
-          if(Math.abs(screenX-150)<43&&(pos.y-15<obstacle.gapY-obstacle.gap/2||pos.y+15>obstacle.gapY+obstacle.gap/2)){hit=true;break;}
+          if(Math.abs(screenX-150)<35&&(pos.y-12<obstacle.gapY-obstacle.gap/2||pos.y+12>obstacle.gapY+obstacle.gap/2)){hit=true;break;}
         }
         if(hit)this.eliminateArena(room,p.id,"popup");
       }
@@ -1901,8 +2003,9 @@ class GameManager {
       if (now>=a.deadline || Object.keys(a.finished).length>=this.roomManager.connectedPlayers(room).length)
         return this.finishArenaRound(room);
     } else if(["flappy","runner"].includes(a.mode)){
-      // The leader gets to keep flying after everyone else crashes.
-      if(alive().length===0)return this.finishArenaRound(room);
+      // Everyone who started gets a complete attempt. A sleeping phone must
+      // not disappear from the survivor count and prematurely finish the run.
+      if(Object.keys(a.positions).every((id)=>!!a.eliminated[id]))return this.finishArenaRound(room);
     } else if(a.mode==="painter"){
       if(now>=a.deadline)return this.finishArenaRound(room);
     } else if(a.mode==="pong"){
@@ -2031,7 +2134,7 @@ class GameManager {
     if (!pos || a.eliminated[socketId]) return { ok: true };
     const now = Date.now();
     if(a.mode==="painter"&&now<(pos.painterStunnedUntil||0))return {ok:true};
-    if (now - pos.updatedAt < 35) return { ok: true };
+    if (now - pos.updatedAt < (a.mode==="racing"?25:35)) return { ok: true };
     if(a.mode==="pong"){
       const paddleT=Number(raw.x);if(!Number.isFinite(paddleT))return {ok:false,error:"Invalid paddle position."};
       pos.paddleT=Math.max(0,Math.min(1,paddleT));pos.updatedAt=now;
@@ -2042,12 +2145,23 @@ class GameManager {
       pos.updatedAt=now;
       return {ok:true};
     }
-    const x = Number(raw.x), y = Number(raw.y);
-    if (![x, y].every(Number.isFinite)) return { ok: false, error: "Invalid position." };
+    // JSON serializes NaN/Infinity as null. Number(null) is 0, which previously
+    // turned a bad animation frame into a valid-looking teleport to (14,14).
+    if(typeof raw.x!=="number"||typeof raw.y!=="number"||!Number.isFinite(raw.x)||!Number.isFinite(raw.y))
+      return { ok: false, error: "Invalid position." };
+    const x = raw.x, y = raw.y;
     const oldX = pos.x, oldY = pos.y;
     const movementDt = pos.updatedAt ? Math.max(.035, Math.min(.2, (now - pos.updatedAt) / 1000)) : .1;
     pos.x = Math.max(14, Math.min(706, x));
     pos.y = Math.max(14, Math.min(426, y));
+    if(a.mode==="racing"){
+      // Reject stale touch packets and impossible jumps after a phone wakes.
+      // Otherwise a client can teleport to a corner, which then becomes its
+      // nearest crash-respawn location.
+      const dx=pos.x-oldX,dy=pos.y-oldY,distance=Math.hypot(dx,dy);
+      const limit=Math.max(28,520*movementDt);
+      if(distance>limit){pos.x=oldX+dx/distance*limit;pos.y=oldY+dy/distance*limit;}
+    }
     if(a.mode==="fire"){
       const nextX=pos.x,nextY=pos.y;
       pos.x=this.fireBlocked(a,nextX,oldY)?oldX:nextX;
@@ -2069,7 +2183,9 @@ class GameManager {
       const gate=track.checkpoints[pos.checkpoint];
       // Test the entire travelled segment. A fast car may cross a gate between
       // two position packets without either endpoint entering its trigger.
-      if(gate&&distanceToSegment(gate[0],gate[1],oldX,oldY,pos.x,pos.y)<92){
+      const {nx,ny}=raceGateNormal(track,gate),half=(track.width||72)/2+10;
+      const gateCrossed=gate&&segmentsIntersect(oldX,oldY,pos.x,pos.y,gate[0]-nx*half,gate[1]-ny*half,gate[0]+nx*half,gate[1]+ny*half);
+      if(gateCrossed||gate&&distanceToSegment(gate[0],gate[1],oldX,oldY,pos.x,pos.y)<18){
         pos.checkpoint++;
         this.emitRoom(room.code,"arena:checkpoint",{
           playerId:socketId,checkpoint:pos.checkpoint,checkpointCount:track.checkpoints.length,lap:pos.lap
@@ -2125,7 +2241,7 @@ class GameManager {
     // the same playful bump rather than rendering players inside one another.
     for (const [otherId, other] of Object.entries(a.positions)) {
       if (otherId === socketId || a.eliminated[otherId] ||
-          (other.layer || 0) !== (pos.layer || 0)) continue;
+          a.mode === "fire" || (other.layer || 0) !== (pos.layer || 0)) continue;
       const dx = pos.x - other.x, dy = pos.y - other.y;
       const distance = Math.hypot(dx, dy), minimum = a.mode==="racing"?42:34;
       if (distance > 0 && distance < minimum &&
@@ -2206,6 +2322,10 @@ class GameManager {
     }
     const pos = room.arena.positions[socketId], now = Date.now();
     if (!pos || room.arena.eliminated[socketId]) return { ok: true };
+    if(room.arena.mode==="racing"){
+      this.emitRoom(room.code,"arena:horn",{playerId:socketId});
+      return {ok:true};
+    }
     if(room.arena.mode==="flappy"){
       if(now<(pos.jumpCooldownUntil||0))return {ok:true};
       pos.vy=-285;pos.jumpCooldownUntil=now+105;
@@ -2255,6 +2375,22 @@ class GameManager {
       room.state=GAME_STATES.RESULTS;room.deadline=null;
       const payload={mode:a.mode,ranking,roundNumber:room.roundIndex+1,totalRounds:room.totalRounds,
         isFinalRound:room.roundIndex+1>=room.totalRounds};
+      room.lastResults=payload;this.emitRoom(room.code,"round:results",payload);return;
+    }
+    if(["flappy","runner"].includes(a.mode)){
+      const ranking=this.roomManager.connectedPlayers(room).map((p)=>{
+        const out=a.eliminated[p.id],distance=Math.floor((a.positions[p.id]?.distance||0)/10);
+        return {playerId:p.id,name:p.name,avatar:p.avatar,survived:!out,
+          timeMs:out?.timeMs??Math.min(duration,Date.now()-a.startedAt),reason:out?.reason,distance};
+      }).sort((x,y)=>y.distance-x.distance||y.timeMs-x.timeMs);
+      ranking.forEach((entry,index)=>{
+        entry.pointsAwarded=[100,60,30,10][index]||10;
+        room.players[entry.playerId].score+=entry.pointsAwarded;
+        entry.totalScore=room.players[entry.playerId].score;
+      });
+      room.state=GAME_STATES.RESULTS;room.deadline=null;
+      const payload={mode:a.mode,ranking,survivors:ranking.filter((p)=>p.survived).length,
+        roundNumber:room.roundIndex+1,totalRounds:room.totalRounds,isFinalRound:room.roundIndex+1>=room.totalRounds};
       room.lastResults=payload;this.emitRoom(room.code,"round:results",payload);return;
     }
     const ranking = this.roomManager.connectedPlayers(room).map((p) => {
@@ -2767,6 +2903,15 @@ class GameManager {
     pf.phase = "race";
     pf.outcomes = {};
     pf.positions = {};
+    // Seed shared positions before the first packet so idle remote racers and
+    // test bots are visible from the instant the race begins.
+    const racers = this.roomManager.connectedPlayers(room);
+    racers.forEach((player,index) => {
+      const spawnCenter = racers.length > 1
+        ? 32 + index * (96 / Math.max(1, racers.length - 1))
+        : pf.level.spawn.x;
+      pf.positions[player.id] = { x:spawnCenter-16, y:pf.level.spawn.y-34, vx:0, vy:0 };
+    });
     room.state = GAME_STATES.QUESTION;
     room.deadline = Date.now() + 25000;
     this.emitRoom(room.code, "platformer:race", {
@@ -3052,7 +3197,7 @@ class GameManager {
     room.deadline = null;
     room.lastActivity = Date.now();
 
-    const standings = Object.values(room.players)
+    const standings = room.arcade?.battle ? this.battleStandings(room) : Object.values(room.players)
       .map((p) => ({
         playerId: p.id, name: p.name, avatar: p.avatar, score: p.score,
         cumulativeDistanceKm: p.mapDistanceKm
@@ -3065,6 +3210,7 @@ class GameManager {
     const payload = {
       mode: this.mode(room),
       arcade: !!room.arcade,
+      battle: !!room.arcade?.battle,
       standings,
       winners,
       winner: winners.length === 1 ? winners[0] : null,
