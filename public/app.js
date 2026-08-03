@@ -260,8 +260,9 @@ $("sound-btn").addEventListener("click", () => {
 
 // ---- Adaptive music --------------------------------------------------------
 const music = {
-  tracks:{lobby:"audio/music/lobby.ogg",wheel:"audio/music/wheel.ogg",quiz:"audio/music/quiz.ogg",
+  tracks:{lobby:"audio/music/lobby.ogg?v=10",wheel:"audio/music/wheel.ogg",quiz:"audio/music/quiz.ogg",
     action:"audio/music/action.ogg",race:"audio/music/race.ogg",fire:"audio/music/fire.ogg",champion:"audio/music/champion.ogg"},
+  trackGain:{lobby:.55},
   decks:[new Audio(),new Audio()],active:0,current:null,pending:"lobby",unlocked:false,muted:false,stingers:new Set(),
   volume:Math.max(0,Math.min(1,Number(localStorage.getItem("mini-mayhem-music-volume")??.10))),fadeToken:0,
   init(){
@@ -277,7 +278,7 @@ const music = {
   unlock(){if(this.unlocked)return;this.unlocked=true;this.play(this.pending||"lobby",0);},
   // A fanfare should lead the mix, while the current background track remains
   // faintly audible so returning to it does not feel like a hard restart.
-  targetVolume(){return this.muted?0:this.volume*(this.stingers.size?.18:1);},
+  targetVolume(){return this.muted?0:this.volume*(this.trackGain[this.current]??1)*(this.stingers.size?.18:1);},
   play(key,fadeMs=900){
     if(!this.tracks[key])return;this.pending=key;if(!this.unlocked)return;
     if(this.current===key){const a=this.decks[this.active];a.volume=this.targetVolume();if(!document.hidden)a.play().catch(()=>{});return;}
