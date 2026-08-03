@@ -152,6 +152,27 @@ test("advances through five rounds and identifies final winner", () => {
   assert.equal(finished.payload.winner.score, 500); // 100 * 5 rounds
 });
 
+test("single-round standalone game reaches final results with one advance", () => {
+  const { rm, gm, emitted } = setup();
+  const { room } = rm.createRoom("host", "Runar");
+  rm.joinRoom("guest", room.code, "Anna");
+  room.settings.rounds = 1;
+  gm.startGame(room, "host");
+
+  gm.submitGuess(room, "host", room.currentQuestion.answer);
+  gm.submitGuess(room, "guest", room.currentQuestion.answer + 1000);
+  assert.equal(room.state, GAME_STATES.RESULTS);
+
+  const advance = gm.nextRound(room, "host");
+  assert.equal(advance.ok, true);
+  assert.equal(room.state, GAME_STATES.FINISHED);
+  assert.equal(emitted.filter((entry) => entry.event === "game:finished").length, 1);
+
+  const repeated = gm.nextRound(room, "host");
+  assert.equal(repeated.ok, false);
+  assert.equal(emitted.filter((entry) => entry.event === "game:finished").length, 1);
+});
+
 test("non-host cannot advance the round", () => {
   const { rm, gm } = setup();
   const { room } = rm.createRoom("host", "Runar");

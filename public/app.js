@@ -102,6 +102,7 @@ let currentScreen = "home";
 function showScreen(name) {
   const previousScreen = currentScreen;
   currentScreen = name;
+  if(previousScreen==="arena"&&name!=="arena"&&typeof sfx!=="undefined"){sfx.stopEngine();sfx.stopRoll(true);}
   for (const key of Object.keys(screens)) {
     screens[key].classList.toggle("hidden", key !== name);
   }
@@ -189,9 +190,70 @@ const sound = {
   sad() { [440, 349, 262].forEach((f, i) => this.later(() => this.beep(f, 0.22, "sine", 0.05), i * 130)); }
 };
 
+// Short, low-volume CC0 samples. These share the existing speaker toggle so
+// the game still has one obvious sound-effects control.
+const sfx = {
+  paths: {
+    uiClick: "audio/sfx/ui-click.ogg", confirm: "audio/sfx/confirm.ogg", error: "audio/sfx/error.ogg",
+    wheelTick: "audio/sfx/wheel-tick.ogg", wheelStop: "audio/sfx/wheel-stop.ogg", announcement: "audio/sfx/announcement.ogg",
+    bump: "audio/sfx/bump.ogg", carHit: "audio/sfx/car-hit.ogg", blockPlace: "audio/sfx/block-place.ogg",
+    curlingHit: "audio/sfx/curling-hit.ogg", coin: "audio/sfx/coin.ogg", doorOpen: "audio/sfx/door-open.ogg",
+    doorClose: "audio/sfx/door-close.ogg", cardPlace: "audio/sfx/card-place.ogg", cardShuffle: "audio/sfx/card-shuffle.ogg",
+    jump: "audio/sfx/jump.ogg?v=2", eliminated: "audio/sfx/eliminated.ogg", pongHit: "audio/sfx/pong-hit.ogg",
+    explosion: "audio/sfx/explosion.ogg", stoneOff: "audio/sfx/stone-off.ogg", roll: "audio/sfx/roll.ogg"
+  },
+  volume: .28, active: new Set(), lastPlayed: new Map(),
+  play(name, { volume = 1, rate = 1, throttle = 0 } = {}) {
+    if (!sound.on || !this.paths[name] || document.hidden) return;
+    const now = performance.now(), previous = this.lastPlayed.get(name) || 0;
+    if (throttle && now - previous < throttle) return;
+    this.lastPlayed.set(name, now);
+    const audio = new Audio(this.paths[name]);
+    audio.preload = "auto"; audio.volume = Math.min(1, this.volume * volume);
+    audio.playbackRate = Math.max(.65, Math.min(1.5, rate));
+    this.active.add(audio);
+    const done = () => this.active.delete(audio);
+    audio.addEventListener("ended", done, { once: true });
+    audio.addEventListener("error", done, { once: true });
+    audio.play().catch(done);
+  },
+  whoosh(volume=.028){
+    if(!sound.on)return;sound.ensure();const ctx=sound.ctx;if(!ctx)return;
+    const osc=ctx.createOscillator(),gain=ctx.createGain(),now=ctx.currentTime;
+    osc.type="triangle";osc.frequency.setValueAtTime(720,now);osc.frequency.exponentialRampToValueAtTime(150,now+.16);
+    gain.gain.setValueAtTime(.0001,now);gain.gain.exponentialRampToValueAtTime(volume,now+.018);gain.gain.exponentialRampToValueAtTime(.0001,now+.17);
+    osc.connect(gain).connect(ctx.destination);osc.start(now);osc.stop(now+.18);
+  },
+  engine:null,
+  setEngine(speed=0){
+    if(!sound.on||document.hidden||speed<8){this.stopEngine();return;}
+    sound.ensure();const ctx=sound.ctx;if(!ctx)return;
+    if(!this.engine){const osc=ctx.createOscillator(),gain=ctx.createGain();osc.type="sawtooth";gain.gain.value=0;osc.connect(gain).connect(ctx.destination);osc.start();this.engine={osc,gain};}
+    const now=ctx.currentTime;this.engine.osc.frequency.setTargetAtTime(48+Math.min(220,Math.abs(speed))*.78,now,.04);
+    this.engine.gain.gain.setTargetAtTime(.018,now,.08);
+  },
+  stopEngine(){if(!this.engine)return;try{this.engine.osc.stop();}catch{}this.engine=null;},
+  rollAudio:null,rollHeld:false,
+  startRoll(){
+    if(!sound.on||document.hidden)return;this.rollHeld=true;
+    if(this.rollAudio){this.rollAudio.loop=true;return;}
+    const audio=new Audio(this.paths.roll);audio.preload="auto";audio.volume=Math.min(1,this.volume*.294);audio.loop=true;
+    this.rollAudio=audio;
+    const cleanup=()=>{if(this.rollAudio===audio)this.rollAudio=null;};
+    audio.addEventListener("ended",cleanup);audio.addEventListener("error",cleanup,{once:true});audio.play().catch(cleanup);
+  },
+  // Releasing stops repetition, but lets the current scratch finish. Therefore
+  // a quick tap still produces one complete, satisfying roll sound.
+  stopRoll(immediate=false){
+    this.rollHeld=false;if(!this.rollAudio)return;this.rollAudio.loop=false;
+    if(immediate){this.rollAudio.pause();this.rollAudio.currentTime=0;this.rollAudio=null;}
+  },
+  stopAll() { for (const audio of this.active) { audio.pause(); audio.currentTime = 0; } this.active.clear();this.stopEngine();this.stopRoll(true); }
+};
+
 $("sound-btn").addEventListener("click", () => {
   sound.on = !sound.on;
-  if(!sound.on)sound.stopScheduled();
+  if(!sound.on){sound.stopScheduled();sfx.stopAll();}
   $("sound-btn").textContent = sound.on ? "🔊" : "🔇";
   if (sound.on) { sound.ensure(); sound.beep(660, 0.1); }
 });
@@ -213,7 +275,9 @@ const music = {
     });
   },
   unlock(){if(this.unlocked)return;this.unlocked=true;this.play(this.pending||"lobby",0);},
-  targetVolume(){return this.muted?0:this.volume;},
+  // A fanfare should lead the mix, while the current background track remains
+  // faintly audible so returning to it does not feel like a hard restart.
+  targetVolume(){return this.muted?0:this.volume*(this.stingers.size?.18:1);},
   play(key,fadeMs=900){
     if(!this.tracks[key])return;this.pending=key;if(!this.unlocked)return;
     if(this.current===key){const a=this.decks[this.active];a.volume=this.targetVolume();if(!document.hidden)a.play().catch(()=>{});return;}
@@ -251,10 +315,11 @@ const music = {
   stinger(name){
     if(!this.unlocked||this.muted)return;const paths={star:"audio/music/star-award.ogg"};if(!paths[name])return;
     const a=new Audio(paths[name]);a.volume=Math.min(.65,this.volume*.9);this.stingers.add(a);
-    const done=()=>this.stingers.delete(a);a.addEventListener("ended",done,{once:true});a.addEventListener("error",done,{once:true});
+    this.decks[this.active].volume=this.targetVolume();
+    const done=()=>{this.stingers.delete(a);this.decks[this.active].volume=this.targetVolume();};a.addEventListener("ended",done,{once:true});a.addEventListener("error",done,{once:true});
     a.play().catch(done);
   },
-  stopStingers(){for(const a of this.stingers){a.pause();a.currentTime=0;}this.stingers.clear();},
+  stopStingers(){for(const a of this.stingers){a.pause();a.currentTime=0;}this.stingers.clear();this.decks[this.active].volume=this.targetVolume();},
   setVolume(raw){this.volume=Math.max(0,Math.min(1,raw));this.muted=this.volume===0;
     localStorage.setItem("mini-mayhem-music-volume",String(this.volume));this.decks[this.active].volume=this.targetVolume();if(this.muted)this.stopStingers();this.paintButton();},
   toggle(){this.muted=!this.muted;this.decks[this.active].volume=this.targetVolume();if(this.muted)this.stopStingers();else this.unlock();this.paintButton();},
@@ -263,6 +328,14 @@ const music = {
 $("music-volume").addEventListener("input",(e)=>music.setVolume(Number(e.target.value)/100));
 $("music-btn").addEventListener("click",()=>music.toggle());
 music.init();
+
+// Add tactile menu feedback without sounding on held movement or joystick
+// controls. Repeated clicks are lightly throttled for phone players.
+document.addEventListener("click", (event) => {
+  const button = event.target.closest("button");
+  if (!button || button.disabled || button.matches(".press-btn,.arena-control,.mobile-control,[data-direction],[data-key]")) return;
+  sfx.play("uiClick", { volume: .28, rate: .98 + Math.random() * .04, throttle: 45 });
+});
 
 // ---- Character creator ------------------------------------------------------
 function buildCreator() {
@@ -392,7 +465,7 @@ document.querySelectorAll(".press-btn").forEach((btn) => {
 });
 
 // ---- Results / Final --------------------------------------------------------
-$("next-btn").addEventListener("click", () => { sound.beep(520, 0.1); socket.emit("round:next"); });
+$("next-btn").addEventListener("click", () => { if($("next-btn").disabled)return;$("next-btn").disabled=true;sound.beep(520, 0.1); socket.emit("round:next"); });
 $("playagain-btn").addEventListener("click", () => socket.emit("game:restart"));
 $("leave-btn").addEventListener("click", async () => {
   const ok = await confirmDialog({ title: "Leave the room?", confirmLabel: "Leave", danger: true });
@@ -401,7 +474,7 @@ $("leave-btn").addEventListener("click", async () => {
 });
 function resetToHome() {
   state.room = null; state.isHost = false; state.submitted = false;
-  state.mode="trivia";stopTimer();sound.stopScheduled();showScreen("home");
+  state.mode="trivia";stopTimer();sound.stopScheduled();sfx.stopAll();showScreen("home");
 }
 
 // ===================== CONNECTION / RECONNECT =====================
@@ -492,6 +565,7 @@ socket.on("room:error", ({ message }) => {
   else if (currentScreen === "hidebomb") flashError($("hidebomb-status"), message);
   else flashError($("home-error"), message);
   sound.beep(200, 0.2, "sawtooth", 0.03);
+  sfx.play("error", { volume: .5, throttle: 180 });
 });
 
 socket.on("room:created", ({ room, youAreHost, selfId, token, meta }) => enterLobby(room, youAreHost, selfId, token, meta));
@@ -534,6 +608,7 @@ socket.on("round:question", (payload) => {
   sound.beep(700, 0.08);
 });
 socket.on("guess:accepted", ({ guess }) => {
+  sfx.play("confirm", { volume: .38, throttle: 120 });
   state.submitted = true;
   if (currentScreen === "map") {
     $("map-submit").disabled = true;
@@ -566,6 +641,7 @@ socket.on("turn:update", (payload) => {
 });
 socket.on("timeline:votes", ({ votes }) => { updateVotes(votes); });
 socket.on("timeline:result", (payload) => {
+  sfx.play("cardPlace", { volume: .55, rate: .96 + Math.random() * .08, throttle: 100 });
   if (payload.teamVote) showTeamResult(payload);
   else showTimelineToast(payload);
 });
@@ -579,6 +655,7 @@ socket.on("platformer:map-votes", ({ votes, votedPlayerIds }) => {
 socket.on("platformer:map-selected", applyPlatformerMapSelected);
 socket.on("platformer:placed", ({ placements, pool, builders, removableTiles }) => {
   if (!platformer.view || platformer.phase !== "build") return;
+  sfx.play("blockPlace", { volume: .45, rate: .9 + Math.random() * .16, throttle: 70 });
   platformer.view.placements = placements || [];
   if (pool) platformer.view.pool = pool;
   if (builders) platformer.view.builders = builders;
@@ -621,6 +698,7 @@ socket.on("redlight:light", ({ light, players }) => {
 socket.on("redlight:progress", ({ players }) => renderRedLightPlayers(players));
 socket.on("redlight:caught", ({ playerId, name, players }) => {
   renderRedLightPlayers(players);
+  sfx.play("eliminated",{volume:playerId===state.selfId ? .7 : .36,rate:.92,throttle:140});
   if (playerId === state.selfId) {
     redlight.done = true;
     stopRedLightMove();
@@ -678,16 +756,22 @@ socket.on("arena:eliminated", ({ playerId, reason }) => {
   }
   if (playerId === state.selfId) {
     arena.done = true;
+    sfx.stopRoll(true);
     $("arena-status").textContent = reason === "exploded" ? "BOOM! You’re out." :
       reason === "miss" ? "No hearts left—watch the remaining paddles!" : "You fell! Watch the survivors.";
   }
   arena.bursts.push({x:p?.x||360,y:p?.y||220,born:performance.now(),color:reason==="lava"?"#fb923c":"#7dd3fc",count:18});
   const canvas=$("arena-canvas");canvas.classList.remove("shake");void canvas.offsetWidth;canvas.classList.add("shake");
+  sfx.play("eliminated",{volume:playerId===state.selfId ? .7 : .38,rate:.9+Math.random()*.1,throttle:140});
 });
 socket.on("arena:jumped", ({playerId,jumpingUntil}) => {
   const p=arena.players.get(playerId);
   if(p)p.jumpingUntil=jumpingUntil;
   if(playerId===state.selfId&&arena.player)arena.player.jumpingUntil=jumpingUntil;
+  if(playerId!==state.selfId){
+    if(arena.mode==="flappy")sfx.whoosh(.009);
+    else sfx.play("jump",{volume:.13,rate:1.02+Math.random()*.08,throttle:80});
+  }
 });
 socket.on("arena:bump", ({targetId,intensity,nx,ny,racing,impulses}) => {
   const target=targetId===state.selfId?arena.player:arena.players.get(targetId);
@@ -703,7 +787,11 @@ socket.on("arena:bump", ({targetId,intensity,nx,ny,racing,impulses}) => {
     }
   }
   arena.bursts.push({x:target?.x||360,y:target?.y||220,born:performance.now(),color:"#fef08a",count:5+Math.round(intensity*7)});
-  if(targetId===state.selfId)sound.beep(145+intensity*90,.045,"square",.018);
+  const locallyInvolved=targetId===state.selfId||!!impulses?.[state.selfId];
+  if(locallyInvolved){
+    sound.beep(145+intensity*90,.045,"square",.018);
+    sfx.play(racing?"carHit":"bump",{volume:.3+Math.min(.55,intensity*.45),rate:.9+Math.random()*.18,throttle:85});
+  }
 });
 socket.on("arena:layer", ({playerId,layer}) => {
   const p=arena.players.get(playerId);
@@ -733,7 +821,14 @@ socket.on("bombpass:holder", ({ holderId, fromId }) => {
     (fromId === state.selfId ? "Passed! Get away!" : "");
 });
 socket.on("arena:fire", ({bombs,blasts,crates,powerups,fireShrinkLevel}) => {
+  let fresh=false;
+  for(const blast of blasts||[]){
+    const key=`${blast.until}:${blast.cells?.[0]||""}`;
+    arena.seenFireBlasts??=new Set();
+    if(!arena.seenFireBlasts.has(key)){arena.seenFireBlasts.add(key);fresh=true;}
+  }
   arena.bombs=bombs||[];arena.blasts=blasts||[];arena.crates=crates||[];
+  if(fresh)sfx.play("explosion",{volume:.65,rate:.82+Math.random()*.1,throttle:110});
   if(powerups)arena.powerups=powerups;
   if(Number.isFinite(fireShrinkLevel))arena.fireShrinkLevel=fireShrinkLevel;
 });
@@ -741,7 +836,11 @@ socket.on("arena:powerup", ({playerId,type,upgrades}) => {
   const target=playerId===state.selfId?arena.player:arena.players.get(playerId);
   if(target)target.upgrades=upgrades;
   const labels={range:"BIGGER BLAST!",bombs:"EXTRA BOMB!",speed:"SPEED UP!"};
-  if(playerId===state.selfId){$("arena-status").textContent=labels[type]||"POWER UP!";sound.happy();}
+  if(playerId===state.selfId){$("arena-status").textContent=labels[type]||"POWER UP!";sound.happy();sfx.play("confirm",{volume:.45,rate:1.08,throttle:120});}
+});
+socket.on("arena:pong-hit",({speed})=>{
+  sfx.play("pongHit",{volume:.28+Math.min(.32,(Number(speed)||180)/700),rate:1.32+Math.random()*.12,throttle:38});
+  sound.beep(1220,.018,"sine",.009);
 });
 socket.on("arena:racer-finished", ({playerId,place}) => {
   const p=arena.players.get(playerId);if(p)p.finished=true;
@@ -774,7 +873,7 @@ socket.on("arena:flappy-obstacles",({obstacles})=>{
 socket.on("arena:runner-coin",({playerId,index,coins})=>{
   const p=playerId===state.selfId?arena.player:arena.players.get(playerId);
   if(p){p.coins=coins;p.collectedCoins??=[];p.collectedCoins.push(index);}
-  if(playerId===state.selfId){sound.beep(760,.05,"sine",.025);arena.runnerFlash={text:`COIN SPEED +${coins}`,at:performance.now(),color:"#fde047"};}
+  if(playerId===state.selfId){sound.beep(760,.05,"sine",.025);sfx.play("coin",{volume:.42,rate:.96+Math.random()*.12,throttle:45});arena.runnerFlash={text:`COIN SPEED +${coins}`,at:performance.now(),color:"#fde047"};}
 });
 socket.on("arena:runner-perfect",({playerId,type})=>{
   const p=playerId===state.selfId?arena.player:arena.players.get(playerId);if(p)p.perfects=(p.perfects||0)+1;
@@ -800,6 +899,7 @@ socket.on("arena:painter-bucket",({playerId,type,buckets})=>{
   const who=playerId===state.selfId?"YOU":(arena.players.get(playerId)?.name||"A PLAYER");
   arena.painterFlash={text:`${who} SPILLED A ${type.toUpperCase()} BUCKET!`,at:performance.now()};
   sound.beep(type==="lightning"?180:(playerId===state.selfId?820:540),type==="lightning" ? .22 : .14,type==="lightning"?"sawtooth":"triangle",.03);
+  sfx.play(type==="lightning"?"error":"confirm",{volume:playerId===state.selfId ? .5 : .28,rate:type==="lightning" ? .75 : 1.08,throttle:100});
 });
 socket.on("arena:painter-capture",({playerId})=>{if(playerId===state.selfId){sound.beep(760,.12,"triangle",.03);arena.painterFlash={text:"LOOP COMPLETE!",at:performance.now()};}});
 socket.on("arena:painter-cut",({playerId,by})=>{if(playerId===state.selfId){sound.beep(120,.18,"sawtooth",.035);arena.painterFlash={text:by===playerId?"LOOP BROKEN!":"TRAIL CUT!",at:performance.now()};}});
@@ -901,6 +1001,7 @@ function showSpinAnnouncement(name){
   clearTimeout(spinAnnouncementTimer);
   const popup=$("spin-announcement");$("spin-announcement-text").textContent=`${name}'s turn to spin the wheel!`;
   popup.classList.remove("hidden");void popup.offsetWidth;
+  sfx.play("announcement",{volume:.48,throttle:500});
   spinAnnouncementTimer=setTimeout(()=>popup.classList.add("hidden"),2200);
 }
 
@@ -931,6 +1032,8 @@ function animateBattleWheel(payload) {
   wheel.style.transition = "none"; wheel.style.transform = "rotate(0deg)"; void wheel.offsetWidth;
   wheel.style.transition = "transform 3.15s cubic-bezier(.12,.72,.08,1)"; wheel.style.transform = `rotate(${rotation}deg)`;
   $("battle-spin-btn").classList.add("hidden"); $("battle-spinner-label").textContent = "The wheel is choosing…";
+  [80,150,220,295,375,460,555,660,780,915,1065,1235,1430,1650,1900,2180,2490,2760].forEach((delay,index) =>
+    sound.later(() => sfx.play("wheelTick", { volume: .3, rate: 1.12 - index * .018, throttle: 30 }), delay));
   setTimeout(() => {
     const info = MODE_INFO[payload.selectedMode] || {};
     $("battle-wheel-center").textContent = info.emoji || "🎮";
@@ -938,6 +1041,7 @@ function animateBattleWheel(payload) {
     $("inter-progress").textContent = "Get ready — the minigame is starting!";
     $("battle-spinner-label").textContent = `${info.name || payload.selectedMode} selected`;
     sound.chord([523,659,784],.22);
+    sfx.play("wheelStop",{volume:.58,throttle:500});
   }, 2850);
 }
 
@@ -1495,8 +1599,10 @@ function renderOtherTimelines(timelines, activeId) {
 }
 
 function updateCurling(payload) {
+  const shotJustStarted=!!payload.trajectory?.length&&!curlingVisual.anim;
   if(payload.stones)curlingVisual.stones=payload.stones;
-  if(payload.trajectory?.length)curlingVisual.anim={frames:payload.trajectory,started:performance.now()};
+  if(payload.trajectory?.length)curlingVisual.anim={frames:payload.trajectory,collisionFrames:payload.collisionFrames||[],playedCollisions:new Set(),offStoneIds:new Set((payload.trajectory[0]||[]).filter((s)=>s.off).map((s)=>s.stoneId)),started:performance.now()};
+  if(shotJustStarted)sfx.play("bump",{volume:.18,rate:1.15,throttle:200});
   if (payload.order) renderTurnOrder($("curling-order"), payload.order);
   const active = payload.order ? payload.order.find((o) => o.active) : null;
   const activeName = active ? active.name : payload.lastName;
@@ -1605,7 +1711,17 @@ function drawCurlingRink(now=performance.now()){
   if(curlingVisual.anim){
     const frameMs=25,settleHold=1200,age=now-curlingVisual.anim.started;
     const index=Math.min(curlingVisual.anim.frames.length-1,Math.floor(age/frameMs));
+    for(const collisionIndex of curlingVisual.anim.collisionFrames||[]){
+      if(collisionIndex<=index&&!curlingVisual.anim.playedCollisions.has(collisionIndex)){
+        curlingVisual.anim.playedCollisions.add(collisionIndex);
+        sfx.play("curlingHit",{volume:.52,rate:.92+Math.random()*.12,throttle:75});
+      }
+    }
     stones=curlingVisual.anim.frames[index]||stones;animating=index<curlingVisual.anim.frames.length-1;
+    for(const stone of stones)if(stone.off&&!curlingVisual.anim.offStoneIds.has(stone.stoneId)){
+      curlingVisual.anim.offStoneIds.add(stone.stoneId);
+      sfx.play("stoneOff",{volume:.5,rate:.82+Math.random()*.1,throttle:100});
+    }
     if(!animating&&age<curlingVisual.anim.frames.length*frameMs+settleHold)animating=true;
     if(!animating){
       curlingVisual.anim=null;
@@ -2399,6 +2515,7 @@ function applyHideBombReveal(payload) {
   renderHideBombBoard(payload.target); renderHideBombPlayers();
   renderHideBombControls();
   sound.beep(75,.45,"sawtooth",.06);
+  if(payload.eliminated?.length)sfx.play("eliminated",{volume:.6,rate:.86,throttle:140});
   sound.later(()=>sound.beep(48,.55,"triangle",.045),70);
 }
 
@@ -2664,6 +2781,7 @@ function stepPushy(dt, now) {
     if (dist < min && dist > 0) {
       const force=(min-dist)*(q.large?11:8); p.vx += dx/dist*force; p.vy += dy/dist*force;
       p.stunUntil = performance.now() + 180;
+      sfx.play("bump",{volume:q.large ? .42 : .25,rate:q.large ? .84 : 1.12,throttle:95});
     }
   }
   pushy.penguins = pushy.penguins.filter((q) => q.x>-340&&q.x<780&&q.y>-60&&q.y<500);
@@ -2762,6 +2880,7 @@ function finishPushy(outcome) {
   $("pushy-controls").classList.add("hidden");
   $("pushy-title").textContent=outcome==="survived" ? "You survived! 🎉" : "Splash! You fell in.";
   $("pushy-status").textContent="Waiting for the other players…";
+  if(outcome!=="survived")sfx.play("eliminated",{volume:.7,rate:.9,throttle:140});
   socket.emit("pushy:outcome",{outcome,timeMs:performance.now()-pushy.startedAt});
 }
 function setPushyKey(key, down) { pushy.keys[key]=down; }
@@ -3207,6 +3326,7 @@ function stepPlatformer(dt) {
   p.vx = Math.max(-230, Math.min(230, p.vx));
   if (p.jumpQueuedUntil >= now && (p.grounded || p.coyoteUntil >= now)) {
     p.vy = -430; p.grounded = false; p.coyoteUntil = 0; p.jumpQueuedUntil = 0;
+    sfx.play("jump",{volume:.32,rate:.96+Math.random()*.08,throttle:110});
   }
   // A supported player stays mathematically planted. Previously gravity moved
   // them down every frame and collision snapped them back up, producing jitter.
@@ -3304,6 +3424,7 @@ function finishPlatformer(outcome) {
   $("platformer-controls").classList.add("hidden");
   $("platformer-title").textContent = outcome === "goal" ? "You made it! 🎉" : "You fell!";
   $("platformer-status").textContent = "Waiting for the other racers…";
+  if(outcome!=="goal")sfx.play("eliminated",{volume:.7,rate:.9,throttle:140});
   socket.emit("platformer:outcome", { outcome, timeMs: performance.now()-platformer.startedAt });
 }
 
@@ -3402,6 +3523,7 @@ function applyArenaStart(payload) {
   state.mode = payload.mode; state.deadline = payload.deadline;
   for(const key of ["left","right","up","down"])arena.keys[key]=false;
   arena.mode = payload.mode; arena.instanceId=payload.instanceId; arena.done = false; arena.safeColor = payload.safeColor || 0;
+  sfx.stopEngine();sfx.stopRoll(true);
   arena.tileLayout=payload.tileLayout||[];arena.dangerAt=payload.dangerAt||0;
   arena.scrambleUntil=payload.scrambleUntil||0;arena.colorCycle=payload.cycle??-1;
   arena.holderId = payload.holderId; arena.holderSince = performance.now();
@@ -3416,6 +3538,7 @@ function applyArenaStart(payload) {
   arena.balls=payload.balls||[];arena.pongSides=payload.pongSides||4;arena.playerSides=payload.playerSides||{};arena.lives=payload.lives||{};
   arena.pongLifeEffects=[];
   arena.bombs=payload.bombs||[];arena.blasts=payload.blasts||[];arena.crates=payload.crates||[];arena.powerups=payload.powerups||[];arena.fireShrinkLevel=payload.fireShrinkLevel||0;
+  arena.seenFireBlasts=new Set((arena.blasts||[]).map((blast)=>`${blast.until}:${blast.cells?.[0]||""}`));
   arena.tiles = new Map((payload.tiles || []).map((t) => [t.key,t]));
   arena.localTileTimes = new Map();
   arena.bursts=[];
@@ -3603,6 +3726,7 @@ function stepArena(dt,now) {
     const throttle=(arena.keys.up?1:0)-(arena.keys.down?1:0);
     p.speed+=(throttle*250-p.speed*.9)*dt;
     p.speed=Math.max(-90,Math.min(255,p.speed));
+    sfx.setEngine(Math.abs(p.speed));
     if(Math.abs(p.speed)>8)p.angle+=steer*2.5*dt*(p.speed>=0?1:-1);
     p.x+=Math.cos(p.angle)*p.speed*dt;p.y+=Math.sin(p.angle)*p.speed*dt;
     p.x+=(p.impactVx||0)*dt;p.y+=(p.impactVy||0)*dt;
@@ -4456,7 +4580,12 @@ function applyColorSignal({safeColor,dangerAt,scrambleUntil,cycle,tileLayout}) {
     sign.querySelector(".sign-label").textContent="DANGER — WRONG COLORS ARE LAVA";
   },Math.max(0,dangerAt-Date.now()));
 }
-function setArenaKey(key,down){arena.keys[key]=down;}
+function setArenaKey(key,down){
+  const changed=arena.keys[key]!==down;arena.keys[key]=down;
+  if(changed&&arena.mode==="runner"&&key==="down"){
+    if(down)sfx.startRoll();else sfx.stopRoll();
+  }
+}
 function jumpArena(){
   if(currentScreen!=="arena"||arena.done||!arena.player)return;
   if(arena.mode==="racing"){socket.emit("arena:jump",{instanceId:arena.instanceId});return;}
@@ -4464,18 +4593,18 @@ function jumpArena(){
   if(arena.mode==="flappy"){
     if(now-arena.lastJumpAt<95)return;
     arena.lastJumpAt=now;arena.player.vy=-285;socket.emit("arena:jump",{instanceId:arena.instanceId});
-    sound.beep(520,.045,"sine",.018);return;
+    sfx.whoosh();return;
   }
   if(arena.mode==="runner"){
     if(now-arena.lastJumpAt<180||arena.player.y<324)return;
     arena.lastJumpAt=now;arena.player.vy=-420;socket.emit("arena:jump",{instanceId:arena.instanceId});
-    sound.beep(360,.06,"square",.022);return;
+    sfx.play("jump",{volume:.34,rate:.94,throttle:110});return;
   }
   if(now-arena.lastJumpAt<1000)return;
   arena.lastJumpAt=now;
   if(arena.mode==="fire"){socket.emit("arena:jump",{instanceId:arena.instanceId});sound.beep(120,.08,"square",.03);return;}
   arena.player.jumpingUntil=now+620;
-  socket.emit("arena:jump",{instanceId:arena.instanceId});
+  sfx.play("jump",{volume:.34,rate:1,throttle:110});socket.emit("arena:jump",{instanceId:arena.instanceId});
 }
 window.addEventListener("keydown",(e)=>{
   if(currentScreen!=="arena")return;
@@ -4546,12 +4675,14 @@ function applyDoorsChoose(payload){
 }
 function applyDoorsReveal(payload){
   doors.state=payload;doors.revealed=true;stopTimer();
+  sfx.play("doorOpen",{volume:.5,rate:.96+Math.random()*.06,throttle:250});
   doors.revealAt=performance.now();updateDoorPlayers(payload.players||[]);
   const me=payload.players.find((p)=>p.playerId===state.selfId);
   const effect=payload.effects[me?.choice];
   $("doors-title").textContent=DOOR_EFFECTS[effect]?.[1]||"Doors revealed!";
   $("doors-hint").textContent=payload.stage<payload.maxStages?"Next choice coming up…":"That was the final door.";
   $("doors-status").textContent=me?.eliminated?"You’re out—watch the survivors.":`You have ${me?.hearts||0} heart${me?.hearts===1?"":"s"} left.`;
+  if(me?.eliminated||effect==="damage")sound.later(()=>sfx.play("doorClose",{volume:.42,rate:.94,throttle:250}),520);
   renderDoors();
 }
 function updateDoorPlayers(players){

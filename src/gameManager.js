@@ -685,7 +685,8 @@ class GameManager {
       order: this.curlingOrderView(room),
       shots: this.curlingShots(room),
       stones:room.curlingStones,
-      trajectory:room.curlingTrajectory
+      trajectory:room.curlingTrajectory,
+      collisionFrames:room.curlingCollisionFrames||[]
     };
   }
 
@@ -693,7 +694,7 @@ class GameManager {
     const bodies=(room.curlingStones||[]).map((s)=>({...s,vx:0,vy:0}));
     const angle=shot.direction*18*Math.PI/180,speed=340+shot.power*330;
     bodies.push({playerId,stoneId,x:0,y:720,vx:Math.sin(angle)*speed,vy:-Math.cos(angle)*speed,off:false});
-    const frames=[],dt=1/120,radius=18;
+    const frames=[],collisionFrames=[],dt=1/120,radius=18;
     for(let step=0;step<1440;step++){
       let moving=false;
       for(const b of bodies){
@@ -718,6 +719,8 @@ class GameManager {
         if(relative<0){
           const impulse=-(1+.9)*relative/2;
           a.vx-=impulse*nx;a.vy-=impulse*ny;b.vx+=impulse*nx;b.vy+=impulse*ny;
+          const frameIndex=Math.floor(step/3);
+          if(collisionFrames.at(-1)!==frameIndex)collisionFrames.push(frameIndex);
           moving=true;
         }
       }
@@ -725,6 +728,7 @@ class GameManager {
       if(!moving&&step>10)break;
     }
     room.curlingStones=bodies.map(({playerId,stoneId,x,y,off})=>({playerId,stoneId,x,y,off}));
+    room.curlingCollisionFrames=collisionFrames;
     return frames;
   }
 
@@ -1953,6 +1957,7 @@ class GameManager {
           if(paddleHit){
             const english=(along-paddleOffset)/52;
             ball.vx+=tx*english*75;ball.vy+=ty*english*75;
+            this.emitRoom(room.code,"arena:pong-hit",{ballId:ball.id,side:hit.side,speed:Math.hypot(ball.vx,ball.vy)});
           }
           const speed=Math.min(330,Math.hypot(ball.vx,ball.vy)*1.035);
           const length=Math.max(1,Math.hypot(ball.vx,ball.vy));ball.vx=ball.vx/length*speed;ball.vy=ball.vy/length*speed;
