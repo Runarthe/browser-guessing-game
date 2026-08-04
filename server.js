@@ -72,8 +72,8 @@ function roomView(room) {
 // Static metadata the client needs to render the settings + character UI.
 const GAME_META = {
   modes: GAME_MODES,
-  readyModes: ["curling", "platformer", "pushy", "hidebomb", "colorfloor", "vanish", "fire", "racing", "flappy", "runner", "painter", "pong", "drawing", "trivia", "timeline", "map", "bomb"],
-  wipModes: ["bombpass", "redlight", "doors"],
+  readyModes: ["curling", "golf", "platformer", "pushy", "hidebomb", "colorfloor", "vanish", "fire", "racing", "flappy", "runner", "painter", "pong", "doors", "drawing", "trivia", "timeline", "map", "bomb"],
+  wipModes: ["bombpass", "redlight"],
   rounds: ALLOWED_ROUNDS,
   seconds: ALLOWED_SECONDS,
   targets: ALLOWED_TARGETS,
@@ -123,6 +123,10 @@ function startTestBots(room) {
       gameManager.submitGuess(current, activeId, Math.round(Math.random() * 1000));
       return;
     }
+    if(mode==="golf"&&current.players[activeId]?.isBot&&Date.now()>=(current.golf?.playbackUntil||0)){
+      gameManager.submitGuess(current,activeId,{direction:(Math.random()-.5)*.7,power:.45+Math.random()*.45});
+      return;
+    }
     for (const bot of bots) {
       if (["trivia", "map"].includes(mode) && bot.guess === null) {
         if (mode === "map") gameManager.submitGuess(current, bot.id, {
@@ -132,11 +136,11 @@ function startTestBots(room) {
       } else if (mode === "doors" && !current.doors?.eliminated[bot.id] &&
                  !Number.isInteger(current.doors?.choices[bot.id])) {
         const d=current.doors,pos=d.positions[bot.id];
-        d.botTargets[bot.id] ??= Math.floor(Math.random()*4);
-        const targetX=d.botTargets[bot.id]*180+90;
+        d.botTargets[bot.id] ??= Math.floor(Math.random()*3);
+        const targetX=d.botTargets[bot.id]*240+120;
         gameManager.doorsPosition(current,bot.id,{
           x:pos.x+Math.sign(targetX-pos.x)*Math.min(10,Math.abs(targetX-pos.x)),
-          y:pos.y-7
+          y:pos.y-9
         });
       } else if (["colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "runner", "painter", "pong"].includes(mode) &&
                  !current.arena?.eliminated[bot.id]) {
@@ -464,6 +468,12 @@ io.on("connection", (socket) => {
     if (!result.ok) socket.emit("room:error", { message: result.error });
   });
 
+  socket.on("platformer:crumble", ({ key } = {}) => {
+    const room=roomManager.getRoom(socket.data.roomCode);
+    const result=gameManager.platformerCrumble(room,socket.id,key);
+    if(!result.ok)socket.emit("room:error",{message:result.error});
+  });
+
   socket.on("drawing:clear", () => {
     const room = roomManager.getRoom(socket.data.roomCode);
     const result = gameManager.drawingClear(room, socket.id);
@@ -583,6 +593,16 @@ io.on("connection", (socket) => {
   socket.on("game:restart", () => {
     const room = roomManager.getRoom(socket.data.roomCode);
     const result = gameManager.restartGame(room, socket.id);
+    if (!result.ok) {
+      socket.emit("room:error", { message: result.error });
+      return;
+    }
+    broadcastRoom(room);
+  });
+
+  socket.on("game:rematch", () => {
+    const room = roomManager.getRoom(socket.data.roomCode);
+    const result = gameManager.rematchGame(room, socket.id);
     if (!result.ok) {
       socket.emit("room:error", { message: result.error });
       return;

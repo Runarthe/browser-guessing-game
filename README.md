@@ -200,7 +200,7 @@ Systems & minigame ideas queued:
   player passes the bomb and briefly protects the recipient from an immediate
   pass-back. Movement speed and warning effects increase as the fuse gets close
   to exploding; the holder is eliminated when it detonates.
-- **Choose a Door** — players get a few seconds to commit to one of several doors
+- **Fire Escape** — outrun rising flames and commit to one of three hidden routes
   across three consecutive selections. Doors can be safe, eliminate a player,
   deal persistent damage, or apply inconveniences such as reversed controls,
   slower movement, obscured choices, or a shorter decision timer. Surviving all

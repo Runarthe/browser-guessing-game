@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#0f1226" />
   <title>Mini Mayhem</title>
-  <link rel="stylesheet" href="styles.css?v=20260802-24" />
+  <link rel="stylesheet" href="styles.css?v=20260804-26" />
 </head>
   <body>
     <div id="game-countdown" class="game-countdown hidden" aria-live="assertive">
@@ -430,11 +430,11 @@
     <section class="screen hidden" id="screen-doors">
       <div class="card game-card">
         <div class="round-bar">
-          <span id="doors-round">Round 1 · Door 1 of 3</span>
-          <span class="timer" id="doors-timer">8s</span>
+          <span id="doors-round">Round 1 · Fire Escape</span>
+          <span class="timer" id="doors-timer">RUN!</span>
         </div>
-        <h2 class="question-text" id="doors-title">Choose a door!</h2>
-        <p class="muted small center" id="doors-hint">Some are safe. Others hurt—or eliminate—you.</p>
+        <h2 class="question-text" id="doors-title">Run from the fire!</h2>
+        <p class="muted small center" id="doors-hint">Run upward, choose a door, and never stop moving.</p>
         <canvas id="doors-canvas" class="arena-canvas doors-canvas" width="720" height="440"></canvas>
         <div class="platformer-controls" id="doors-controls">
           <button class="btn btn-secondary" data-door="left">◀</button>
@@ -486,7 +486,7 @@
           <p>MINIGAME WINNER</p>
           <div id="star-winner-avatar" class="star-winner-avatar"></div>
           <h2 id="star-winner-name"></h2>
-          <strong>+1 BATTLE STAR</strong>
+          <div id="star-grants" class="star-grants"></div>
           <button id="star-proceed-btn" class="btn btn-primary btn-block hidden">Proceed to wheel</button>
           <small id="star-proceed-wait" class="muted hidden">Waiting for the host…</small>
         </div>
@@ -525,7 +525,8 @@
         <ul class="result-list" id="final-list"></ul>
 
         <div class="final-actions">
-          <button id="playagain-btn" class="btn btn-primary hidden">Play again</button>
+          <button id="playagain-btn" class="btn btn-primary hidden">Play again now</button>
+          <button id="return-lobby-btn" class="btn btn-secondary hidden">Return to lobby</button>
           <button id="leave-btn" class="btn btn-secondary">Leave room</button>
         </div>
         <p class="muted small center" id="final-host-note"></p>
@@ -539,6 +540,6 @@
   <script src="characters.js?v=20260725-15"></script>
   <script src="arena25d.js?v=20260725-15"></script>
   <script src="vanishMaps.js?v=20260727-45"></script>
-  <script src="app.js?v=20260804-125"></script>
+  <script src="app.js?v=20260804-145"></script>
 </body>
 </html>

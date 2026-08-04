@@ -13,6 +13,7 @@ function harness(minPlayers = 2) {
   const gm = new GameManager(rm, {
     emitRoom: (code, event, payload) => events.push({ event, payload }),
     minPlayersToStart: minPlayers,
+    roundCountdownMs: 0,
     setTimer: () => 0,
     clearTimer: () => {}
   });
@@ -214,7 +215,7 @@ test("platformer: shared pool reserves picks and broadcasts live builder cursors
   enterPlatformerBuild(gm, room);
   room.platformer.pool.saw = 1;
 
-  assert.equal(room.platformer.level.cols, 24);
+  assert.equal(room.platformer.level.cols, 30);
   assert.equal(room.platformer.level.rows, 14);
   assert.equal(gm.platformerSelect(room, "s1", "saw").ok, true);
   assert.equal(gm.platformerSelect(room, "s2", "saw").ok, false);
@@ -275,6 +276,77 @@ test("platformer: map templates have distinct routes, terrain, and themes", () =
   assert.ok(Object.values(maps.find((m) => m.id === "zigzag").level.tiles).includes("ice"));
 });
 
+test("platformer: the complete spawn zone is protected from player objects", () => {
+  const { rm, gm } = harness();
+  const { room } = rm.createRoom("s1", "Runar");
+  rm.joinRoom("s2", room.code, "Anna");room.settings.mode="platformer";enterPlatformerBuild(gm,room);
+  const result=gm.platformerPlace(room,"s1",{col:4,row:8,type:"spike"});
+  assert.equal(result.ok,false);assert.match(result.error,/spawn zone|guardrail/i);
+  assert.equal(gm.platformerPlace(room,"s1",{col:5,row:8,type:"spike"}).ok,true);
+});
+
+test("platformer: a crumble tile breaks once for every racer",()=>{
+  const {rm,gm,last}=harness();const {room}=rm.createRoom("s1","Runar");rm.joinRoom("s2",room.code,"Anna");
+  room.settings.mode="platformer";enterPlatformerBuild(gm,room);room.platformer.level.tiles["7,8"]="crumble";
+  room.platformer.phase="race";room.platformer.crumbledTiles={};
+  assert.equal(gm.platformerCrumble(room,"s1","7,8").ok,true);
+  assert.equal(room.platformer.crumbledTiles["7,8"],true);assert.equal(last("platformer:crumbled").payload.key,"7,8");
+  assert.equal(gm.platformerCrumble(room,"s2","7,8").ok,true);
+});
+
+test("pocket racers randomly selects its circuits without immediate repeats", () => {
+  const { rm, gm }=harness();const { room }=rm.createRoom("s1","Runar");rm.joinRoom("s2",room.code,"Anna");
+  room.settings.mode="racing";const ids=[];
+  for(let round=0;round<12;round++){room.roundIndex=round;gm.beginArenaRound(room,"racing");ids.push(room.arena.trackId);gm.disarmTimer(room);}
+  assert.ok(ids.every((id)=>["square","swing","harbor","oval"].includes(id)));
+  assert.ok(ids.every((id,index)=>index===0||id!==ids[index-1]));
+});
+
+test("ricochet golf starts with a random closest-positioned opener and simulates bankable shots",()=>{
+  const {rm,gm,last}=harness();const {room}=rm.createRoom("s1","Runar");rm.joinRoom("s2",room.code,"Anna");
+  room.settings.mode="golf";gm.startGame(room,"s1");gm.disarmTimer(room);
+  assert.equal(room.state,GAME_STATES.QUESTION);assert.equal(last("turn:started").payload.mode,"golf");
+  assert.equal(room.turnOrder[0],room.golf.openingPlayerId,"a random opening player takes the first shot");
+  assert.equal(gm.golfDistance(room,room.golf.openingPlayerId),Math.min(...Object.keys(room.golf.balls).map((id)=>gm.golfDistance(room,id))),"the opening ball is placed closest to the hole");
+  assert.equal(gm.golfInside(100,500),true);assert.equal(gm.golfInside(320,420),false);
+  const active=room.turnOrder[0],before={...room.golf.balls[active]};
+  assert.equal(gm.submitGuess(room,active,{direction:.2,power:.55}).ok,true);gm.disarmTimer(room);
+  assert.ok(room.golf.trajectory.length>2);assert.notDeepEqual(room.golf.balls[active],before);
+  assert.notEqual(room.turnOrder[0],active,"every other player gets an opening shot before furthest-first begins");
+});
+
+test("ricochet golf gives everyone one opening shot before selecting the furthest ball",()=>{
+  const {rm,gm}=harness();const {room}=rm.createRoom("s1","Runar");rm.joinRoom("s2",room.code,"Anna");rm.joinRoom("s3",room.code,"Bo");
+  room.settings.mode="golf";gm.startGame(room,"s1");gm.disarmTimer(room);const opening=[...room.golf.openingOrder];
+  for(let i=0;i<opening.length;i++){
+    assert.equal(room.turnOrder[0],opening[i]);room.golf.playbackUntil=0;
+    assert.equal(gm.submitGuess(room,opening[i],{direction:0,power:0}).ok,true);gm.disarmTimer(room);
+  }
+  assert.ok(Object.values(room.golf.shots).every((shots)=>shots===1));
+  const furthest=Object.keys(room.golf.balls).sort((a,b)=>gm.golfDistance(room,b)-gm.golfDistance(room,a))[0];
+  assert.equal(room.turnOrder[0],furthest);
+});
+
+test("ricochet golf records only the first player to hole out for the celebration",()=>{
+  const {rm,gm}=harness();const {room}=rm.createRoom("s1","Runar");rm.joinRoom("s2",room.code,"Anna");room.settings.mode="golf";gm.startGame(room,"s1");gm.disarmTimer(room);
+  const hole=room.golf.hole;Object.assign(room.golf.balls.s1,{x:hole.x-18,y:hole.y});
+  gm.simulateGolfShot(room,"s1",{direction:0,power:0});assert.equal(room.golf.firstHoledPlayerId,"s1");
+  Object.assign(room.golf.balls.s2,{x:hole.x-18,y:hole.y});gm.simulateGolfShot(room,"s2",{direction:0,power:0});
+  assert.equal(room.golf.firstHoledPlayerId,"s1");
+});
+
+test("ricochet golf randomizes courses without repeats and supports gentle full-circle shots",()=>{
+  const {rm,gm}=harness();const {room}=rm.createRoom("s1","Runar");rm.joinRoom("s2",room.code,"Anna");room.settings.mode="golf";
+  gm.beginGolfRound(room);gm.disarmTimer(room);const first=room.golf.courseId;
+  gm.beginGolfRound(room);gm.disarmTimer(room);assert.notEqual(room.golf.courseId,first);
+  assert.ok(["corner","switchback","serpent","bumpers"].includes(room.golf.courseId));
+  assert.equal(gm.golfInside(200,250,12,"bumpers"),false,"bumper obstacles are solid");
+  assert.equal(gm.golfInside(100,250,12,"bumpers"),true);
+  const active=room.turnOrder[0],start={...room.golf.balls[active]};
+  const frames=gm.simulateGolfShot(room,active,{direction:1,power:0});
+  assert.ok(frames.length>1);assert.ok(Math.hypot(room.golf.balls[active].x-start.x,room.golf.balls[active].y-start.y)<35,"minimum power should only nudge the ball");
+});
+
 test("drawing: only the artist draws and correct guesses score both players", () => {
   const { rm, gm, last } = harness();
   const { room } = rm.createRoom("s1", "Runar");
@@ -328,6 +400,7 @@ test("color twister: server validates positions and scores the last survivor", (
   room.settings.rounds = 1;
   assert.equal(gm.startGame(room, "s1").ok, true);
   assert.equal(last("arena:start").payload.mode, "colorfloor");
+  assert.ok(room.arena.deadline-room.arena.startedAt>=70000,"Color Twister should last about 70 seconds");
   assert.equal(gm.arenaPosition(room, "s1", { x: 125, y: 125 }).ok, true);
   assert.equal(gm.arenaJump(room, "s1").ok, true);
   assert.ok(room.arena.positions.s1.jumpUntil > Date.now());
@@ -495,6 +568,7 @@ test("pocket racers: sequential checkpoints complete three laps", () => {
   const { room } = rm.createRoom("s1", "Runar");
   rm.joinRoom("s2", room.code, "Anna");
   room.settings.mode = "racing";
+  gm.random=()=>0; // keep this physics test on its explicit square-track coordinates
   gm.startGame(room, "s1");
   assert.equal(last("arena:start").payload.mode, "racing");
   assert.ok(Math.hypot(
@@ -676,7 +750,7 @@ test("polygon pong: corner strikes resolve against a side instead of escaping", 
   assert.ok(outside<apothem+16,"a corner ball must be reflected or charged as a miss");
 });
 
-test("choose a door: safe, damage, scramble, and elimination resolve server-side", () => {
+test("choose a door: fire escape locks choices and enforces hidden route geometry", () => {
   const { rm, gm, last } = harness();
   const { room } = rm.createRoom("s1", "Runar");
   rm.joinRoom("s2", room.code, "Anna");
@@ -684,18 +758,22 @@ test("choose a door: safe, damage, scramble, and elimination resolve server-side
   rm.joinRoom("s4", room.code, "Mina");
   room.settings.mode = "doors";
   gm.startGame(room, "s1");
-  room.doors.effects = ["safe", "damage", "inconvenience", "eliminate"];
-  room.doors.positions.s1 = { x: 10, y: 100, updatedAt: 0 };
-  gm.doorsPosition(room, "s1", { x: 20, y: 80 });
-  assert.equal(room.doors.choices.s1, 0, "crossing a door threshold locks that door");
-  gm.chooseDoor(room, "s2", 1);
-  gm.chooseDoor(room, "s3", 2);
-  gm.chooseDoor(room, "s4", 3);
-  const reveal = last("doors:reveal").payload;
-  assert.equal(reveal.effects[2], "inconvenience");
-  assert.equal(room.doors.hearts.s2, 1);
-  assert.equal(room.doors.handicaps.s3, true);
-  assert.equal(room.doors.eliminated.s4, true);
+  room.doors.routes=["straight","big","small"];
+  room.doors.positions.s1 = { x: 120, y: 1070, updatedAt: 0 };
+  gm.doorsPosition(room, "s1", { x: 120, y: 1030 });
+  assert.equal(room.doors.choices.s1, 0, "crossing the lane split locks that lane");
+  gm.chooseDoor(room,"s1",2);assert.equal(room.doors.choices.s1,0,"a locked choice cannot be regretted");
+  gm.chooseDoor(room,"s2",1);Object.assign(room.doors.positions.s2,{x:360,y:720,updatedAt:0});gm.doorsPosition(room,"s2",{x:360,y:680});assert.equal(room.doors.positions.s2.y,700,"the big route forces its first detour");
+  gm.chooseDoor(room,"s3",2);Object.assign(room.doors.positions.s3,{x:630,y:580,updatedAt:0});gm.doorsPosition(room,"s3",{x:630,y:540});assert.equal(room.doors.positions.s3.y,560,"the small route forces its single detour");
+  gm.eliminateDoorRunner(room,"s1","fire");gm.eliminateDoorRunner(room,"s2","fire");gm.eliminateDoorRunner(room,"s3","fire");room.doors.endingAt=Date.now()-1;gm.tickDoors(room);
+  assert.equal(last("round:results").payload.ranking[0].playerId,"s4","the round ends when only one runner remains");
+});
+
+test("fire escape accepts movement immediately and rising fire leaves exactly one survivor",()=>{
+  const {rm,gm,last}=harness();const {room}=rm.createRoom("s1","Runar");rm.joinRoom("s2",room.code,"Anna");room.settings.mode="doors";gm.startGame(room,"s1");gm.disarmTimer(room);
+  const startY=room.doors.positions.s1.y;assert.equal(gm.doorsPosition(room,"s1",{x:room.doors.positions.s1.x,y:startY-30}).ok,true);assert.ok(room.doors.positions.s1.y<startY,"the first movement packet must not be discarded");
+  room.doors.startedAt=Date.now()-7000;room.doors.positions.s1.y=1400;room.doors.positions.s2.y=1400;gm.tickDoors(room);room.doors.endingAt=Date.now()-1;gm.tickDoors(room);
+  const result=last("round:results").payload;assert.equal(result.ranking.filter((p)=>p.survived).length,1,"the fire stops after swallowing the second-last runner");
 });
 
 test("red light: green presses advance, red presses eliminate, finishers win", () => {

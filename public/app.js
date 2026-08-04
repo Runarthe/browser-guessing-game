@@ -35,13 +35,14 @@ MODE_INFO.hidebomb = { name: "Hide and Go BOOM!", emoji: "💣", desc: "Hide in 
 MODE_INFO.colorfloor = { name: "Color Twister", emoji: "🌈", desc: "Race onto the called color before every other tile turns to lava." };
 MODE_INFO.vanish = { name: "Vanishing Grid", emoji: "🕳️", desc: "Every tile you step on crumbles. Be the last player standing." };
 MODE_INFO.bombpass = { name: "Bomb Pass", emoji: "💣", desc: "Tag another player to pass the bomb before its hidden fuse runs out." };
-MODE_INFO.fire = { name: "Playing with Fire", emoji: "💥", desc: "Place bombs, blast through crates, and be the last player standing." };
+MODE_INFO.fire = { name: "Blast Brawl", emoji: "💥", desc: "Place bombs, blast through crates, and be the last player standing." };
 MODE_INFO.racing = { name: "Pocket Racers", emoji: "🏎️", desc: "Race tiny cars around a top-down circuit for three laps." };
 MODE_INFO.flappy = { name: "Dragon Rider", emoji: "🐉", desc: "Guide your tiny dragon through a jagged canyon. Furthest distance wins." };
 MODE_INFO.runner = { name: "Wild Run", emoji: "🏃", desc: "Run through an enchanted wilderness, leap over hazards, and go the furthest." };
 MODE_INFO.painter = { name: "Territory Painter", emoji: "🎨", desc: "Every tile you touch becomes your color. Paint over rivals and claim the largest area." };
 MODE_INFO.pong = { name: "Polygon Pong", emoji: "🏓", desc: "Defend your side of the arena. Three misses and you are out." };
-MODE_INFO.doors = { name: "Choose a Door", emoji: "🚪", desc: "Pick through three mystery doors and survive their surprises." };
+MODE_INFO.doors = { name: "Fire Escape", emoji: "🔥", desc: "Outrun the rising flames, commit to a mystery door, and be the last runner standing." };
+MODE_INFO.golf = { name: "Ricochet Golf", emoji: "⛳", desc: "Aim and set power, bank shots around an L-shaped course, collide with rivals, and let the player furthest from the hole shoot next." };
 const AVATAR_COLORS = ["#ff6b6b","#ffcb3d","#4ade80","#60a5fa","#f472b6","#a78bfa","#22d3ee","#fb923c"];
 const AVATAR_KEY = "closest-wins-avatar";
 let myAvatar = loadAvatar();
@@ -197,7 +198,7 @@ const sfx = {
     uiClick: "audio/sfx/ui-click.ogg", confirm: "audio/sfx/confirm.ogg", error: "audio/sfx/error.ogg",
     wheelTick: "audio/sfx/wheel-tick.ogg", wheelStop: "audio/sfx/wheel-stop.ogg", announcement: "audio/sfx/announcement.ogg",
     bump: "audio/sfx/bump.ogg", carHit: "audio/sfx/car-hit.ogg", blockPlace: "audio/sfx/block-place.ogg",
-    curlingHit: "audio/sfx/curling-hit.ogg", coin: "audio/sfx/coin.ogg", doorOpen: "audio/sfx/door-open.ogg",
+    curlingHit: "audio/sfx/curling-hit.ogg", golfHit:"audio/sfx/curling-hit.ogg", golfWall:"audio/sfx/bump.ogg", coin: "audio/sfx/coin.ogg", doorOpen: "audio/sfx/door-open.ogg",
     doorClose: "audio/sfx/door-close.ogg", cardPlace: "audio/sfx/card-place.ogg", cardShuffle: "audio/sfx/card-shuffle.ogg",
     jump: "audio/sfx/jump.ogg?v=2", eliminated: "audio/sfx/eliminated.ogg", pongHit: "audio/sfx/pong-hit.ogg",
     explosion: "audio/sfx/explosion.ogg", stoneOff: "audio/sfx/stone-off.ogg", roll: "audio/sfx/roll.ogg"
@@ -224,15 +225,58 @@ const sfx = {
     gain.gain.setValueAtTime(.0001,now);gain.gain.exponentialRampToValueAtTime(volume,now+.018);gain.gain.exponentialRampToValueAtTime(.0001,now+.17);
     osc.connect(gain).connect(ctx.destination);osc.start(now);osc.stop(now+.18);
   },
+  balloonPop(){
+    if(!sound.on)return;sound.ensure();const ctx=sound.ctx;if(!ctx)return;const now=ctx.currentTime;
+    const buffer=ctx.createBuffer(1,Math.floor(ctx.sampleRate*.16),ctx.sampleRate),data=buffer.getChannelData(0);
+    for(let i=0;i<data.length;i++)data[i]=(Math.random()*2-1)*Math.pow(1-i/data.length,5);
+    const source=ctx.createBufferSource(),filter=ctx.createBiquadFilter(),gain=ctx.createGain();source.buffer=buffer;filter.type="highpass";filter.frequency.value=700;
+    gain.gain.setValueAtTime(.16,now);gain.gain.exponentialRampToValueAtTime(.0001,now+.15);source.connect(filter).connect(gain).connect(ctx.destination);source.start(now);
+    const thump=ctx.createOscillator(),thumpGain=ctx.createGain();thump.type="sine";thump.frequency.setValueAtTime(125,now);thump.frequency.exponentialRampToValueAtTime(58,now+.13);
+    thumpGain.gain.setValueAtTime(.075,now);thumpGain.gain.exponentialRampToValueAtTime(.0001,now+.15);thump.connect(thumpGain).connect(ctx.destination);thump.start(now);thump.stop(now+.16);
+  },
   engine:null,
   setEngine(speed=0){
     if(!sound.on||document.hidden||speed<8){this.stopEngine();return;}
     sound.ensure();const ctx=sound.ctx;if(!ctx)return;
-    if(!this.engine){const osc=ctx.createOscillator(),gain=ctx.createGain();osc.type="sawtooth";gain.gain.value=0;osc.connect(gain).connect(ctx.destination);osc.start();this.engine={osc,gain};}
-    const now=ctx.currentTime;this.engine.osc.frequency.setTargetAtTime(48+Math.min(220,Math.abs(speed))*.78,now,.04);
-    this.engine.gain.gain.setTargetAtTime(.018,now,.08);
+    if(!this.engine){
+      const low=ctx.createOscillator(),high=ctx.createOscillator(),filter=ctx.createBiquadFilter(),gain=ctx.createGain();
+      low.type="sawtooth";high.type="square";filter.type="lowpass";filter.frequency.value=620;filter.Q.value=.7;gain.gain.value=0;
+      low.connect(filter);high.connect(filter);filter.connect(gain).connect(ctx.destination);low.start();high.start();
+      this.engine={low,high,filter,gain,gear:0};
+    }
+    const value=Math.min(255,Math.abs(speed)),thresholds=[0,58,112,171,224,256];
+    let gear=0;while(gear<4&&value>=thresholds[gear+1])gear++;
+    const span=thresholds[gear+1]-thresholds[gear],rpm=Math.max(0,Math.min(1,(value-thresholds[gear])/span));
+    const frequency=54+rpm*76+gear*4,now=ctx.currentTime,e=this.engine;
+    if(gear!==e.gear){
+      // A brief torque dip makes each automatic shift audible without adding
+      // a separate loud sample over the engine.
+      e.gain.gain.cancelScheduledValues(now);e.gain.gain.setValueAtTime(Math.max(.0001,e.gain.gain.value),now);
+      e.gain.gain.linearRampToValueAtTime(.006,now+.025);e.gain.gain.linearRampToValueAtTime(.018,now+.12);e.gear=gear;
+    }else e.gain.gain.setTargetAtTime(.018,now,.07);
+    e.low.frequency.setTargetAtTime(frequency,now,.035);e.high.frequency.setTargetAtTime(frequency*2.02,now,.04);
+    e.filter.frequency.setTargetAtTime(430+rpm*390,now,.07);
   },
-  stopEngine(){if(!this.engine)return;try{this.engine.osc.stop();}catch{}this.engine=null;},
+  stopEngine(){if(!this.engine)return;try{this.engine.low.stop();this.engine.high.stop();}catch{}this.engine=null;},
+  curlingSlide:null,
+  startCurlingSlide(){
+    if(!sound.on||document.hidden||this.curlingSlide)return;sound.ensure();const ctx=sound.ctx;if(!ctx)return;
+    const seconds=1.4,buffer=ctx.createBuffer(1,Math.floor(ctx.sampleRate*seconds),ctx.sampleRate),data=buffer.getChannelData(0);
+    let smooth=0;for(let i=0;i<data.length;i++){smooth=smooth*.965+(Math.random()*2-1)*.035;data[i]=smooth;}
+    const source=ctx.createBufferSource(),filter=ctx.createBiquadFilter(),gain=ctx.createGain(),now=ctx.currentTime;
+    source.buffer=buffer;source.loop=true;filter.type="bandpass";filter.frequency.value=1250;filter.Q.value=.7;
+    gain.gain.setValueAtTime(.0001,now);
+    source.connect(filter).connect(gain).connect(ctx.destination);source.start();this.curlingSlide={source,gain,filter};
+  },
+  setCurlingSlide(speedRatio=0){
+    const slide=this.curlingSlide;if(!slide)return;const ratio=Math.max(0,Math.min(1,speedRatio)),now=sound.ctx.currentTime;
+    slide.gain.gain.setTargetAtTime(.001+ratio*.016,now,.055);
+    slide.filter.frequency.setTargetAtTime(650+ratio*1050,now,.07);
+  },
+  stopCurlingSlide(){
+    const slide=this.curlingSlide;if(!slide)return;this.curlingSlide=null;const now=sound.ctx?.currentTime||0;
+    try{slide.gain.gain.cancelScheduledValues(now);slide.gain.gain.setTargetAtTime(.0001,now,.08);slide.source.stop(now+.35);}catch{}
+  },
   rollAudio:null,rollHeld:false,
   startRoll(){
     if(!sound.on||document.hidden)return;this.rollHeld=true;
@@ -248,7 +292,7 @@ const sfx = {
     this.rollHeld=false;if(!this.rollAudio)return;this.rollAudio.loop=false;
     if(immediate){this.rollAudio.pause();this.rollAudio.currentTime=0;this.rollAudio=null;}
   },
-  stopAll() { for (const audio of this.active) { audio.pause(); audio.currentTime = 0; } this.active.clear();this.stopEngine();this.stopRoll(true); }
+  stopAll() { for (const audio of this.active) { audio.pause(); audio.currentTime = 0; } this.active.clear();this.stopEngine();this.stopCurlingSlide();this.stopRoll(true); }
 };
 
 $("sound-btn").addEventListener("click", () => {
@@ -260,10 +304,10 @@ $("sound-btn").addEventListener("click", () => {
 
 // ---- Adaptive music --------------------------------------------------------
 const music = {
-  tracks:{lobby:"audio/music/lobby.ogg?v=10",wheel:"audio/music/wheel.ogg",quiz:"audio/music/quiz.ogg",
+  tracks:{lobby:"audio/music/lobby.ogg?v=10",golf:"audio/music/lobby.ogg?v=10",wheel:"audio/music/wheel.ogg",wheelSpin:"audio/music/wheel-spin.ogg",quiz:"audio/music/quiz.ogg",
     action:"audio/music/action.ogg",race:"audio/music/race.ogg",fire:"audio/music/fire.ogg",champion:"audio/music/champion.ogg"},
-  trackGain:{lobby:.55},
-  decks:[new Audio(),new Audio()],active:0,current:null,pending:"lobby",unlocked:false,muted:false,stingers:new Set(),
+  trackGain:{lobby:.55,golf:.20,wheelSpin:.18},
+  decks:[new Audio(),new Audio()],active:0,current:null,pending:"lobby",unlocked:false,muted:false,sceneMuted:false,stingers:new Set(),
   volume:Math.max(0,Math.min(1,Number(localStorage.getItem("mini-mayhem-music-volume")??.10))),fadeToken:0,
   init(){
     this.decks.forEach((a)=>{a.loop=true;a.preload="auto";a.volume=0;});
@@ -272,15 +316,13 @@ const music = {
     window.addEventListener("pointerdown",unlock,{once:true,capture:true});window.addEventListener("keydown",unlock,{once:true,capture:true});
     document.addEventListener("visibilitychange",()=>{
       if(document.hidden){this.decks.forEach((a)=>a.pause());this.stopStingers();}
-      else if(this.unlocked&&!this.muted)this.decks[this.active].play().catch(()=>{});
+      else if(this.unlocked&&!this.muted&&!this.sceneMuted)this.decks[this.active].play().catch(()=>{});
     });
   },
   unlock(){if(this.unlocked)return;this.unlocked=true;this.play(this.pending||"lobby",0);},
-  // A fanfare should lead the mix, while the current background track remains
-  // faintly audible so returning to it does not feel like a hard restart.
-  targetVolume(){return this.muted?0:this.volume*(this.trackGain[this.current]??1)*(this.stingers.size?.18:1);},
+  targetVolume(){return this.muted||this.sceneMuted?0:this.volume*(this.trackGain[this.current]??1)*(this.stingers.size?.18:1);},
   play(key,fadeMs=900){
-    if(!this.tracks[key])return;this.pending=key;if(!this.unlocked)return;
+    if(!this.tracks[key])return;this.pending=key;this.sceneMuted=false;if(!this.unlocked)return;
     if(this.current===key){const a=this.decks[this.active];a.volume=this.targetVolume();if(!document.hidden)a.play().catch(()=>{});return;}
     const old=this.decks[this.active],nextIndex=1-this.active,next=this.decks[nextIndex],token=++this.fadeToken;
     next.pause();next.src=this.tracks[key];next.currentTime=0;next.loop=true;next.volume=0;
@@ -295,22 +337,34 @@ const music = {
     }).catch(()=>{if(token===this.fadeToken){next.pause();old.volume=this.targetVolume();}});
   },
   reset(key="lobby"){
-    this.fadeToken++;this.stopStingers();
+    this.fadeToken++;this.sceneMuted=false;this.stopStingers();
     this.decks.forEach((a)=>{a.pause();a.volume=0;a.removeAttribute("src");a.load();});
     this.active=0;this.current=null;this.pending=key;if(this.unlocked)this.play(key,0);
+  },
+  pauseBackground(fadeMs=220){
+    this.sceneMuted=true;const token=++this.fadeToken,begin=performance.now();
+    const starts=this.decks.map((a)=>a.volume);
+    const step=(now)=>{if(token!==this.fadeToken)return;const p=fadeMs?Math.min(1,(now-begin)/fadeMs):1;
+      this.decks.forEach((a,i)=>a.volume=starts[i]*(1-p));
+      if(p<1)requestAnimationFrame(step);else this.decks.forEach((a)=>a.pause());};
+    requestAnimationFrame(step);
   },
   forScreen(screen,previous){
     if(screen==="home"||screen==="lobby"){
       if(previous&&!['home','lobby'].includes(previous))return this.reset("lobby");
       return this.play("lobby");
     }
-    if(screen==="intermission")return this.play("wheel");
+    // Between-game ceremonies, the wheel spin and its countdown are silent.
+    // This leaves room for the award fanfare and makes the spin feel tenser.
+    if(screen==="intermission")return this.pauseBackground();
     if(screen==="final")return this.play("champion",1200);
-    if(screen==="results")return;
+    if(screen==="results")return this.pauseBackground();
     const mode=state.mode;
     if(mode==="fire")return this.play("fire");
+    if(mode==="golf")return this.play("golf",1200);
     if(["racing","runner","flappy"].includes(mode))return this.play("race");
-    if(["trivia","timeline","map","curling","drawing","bomb"].includes(mode))return this.play("quiz");
+    if(mode==="platformer")return this.play(platformer?.phase==="race"?"race":"quiz");
+    if(["trivia","timeline","map","curling","drawing","bomb","hidebomb"].includes(mode))return this.play("quiz");
     this.play("action");
   },
   stinger(name){
@@ -438,7 +492,7 @@ $("guess-input").addEventListener("keydown", (e) => { if (e.key === "Enter") $("
 
 // ---- Turn (curling) ---------------------------------------------------------
 $("turn-submit").addEventListener("click", () => {
-  if(state.mode==="curling"){curlingPress();return;}
+  if(["curling","golf"].includes(state.mode)){curlingPress();return;}
   const raw = $("turn-guess").value;
   if (raw === "" || raw === null) return flashError($("turn-error"), "Enter a number.");
   const guess = Number(raw);
@@ -449,7 +503,7 @@ $("turn-submit").addEventListener("click", () => {
 });
 $("turn-guess").addEventListener("keydown", (e) => { if (e.key === "Enter") $("turn-submit").click(); });
 window.addEventListener("keydown",(e)=>{
-  if(currentScreen==="turn"&&state.mode==="curling"&&e.code==="Space"&&!e.repeat){
+  if(currentScreen==="turn"&&["curling","golf"].includes(state.mode)&&e.code==="Space"&&!e.repeat){
     e.preventDefault();curlingPress();
   }
 });
@@ -467,7 +521,14 @@ document.querySelectorAll(".press-btn").forEach((btn) => {
 
 // ---- Results / Final --------------------------------------------------------
 $("next-btn").addEventListener("click", () => { if($("next-btn").disabled)return;$("next-btn").disabled=true;sound.beep(520, 0.1); socket.emit("round:next"); });
-$("playagain-btn").addEventListener("click", () => socket.emit("game:restart"));
+$("playagain-btn").addEventListener("click", () => {
+  $("playagain-btn").disabled=true;$("return-lobby-btn").disabled=true;
+  socket.emit("game:rematch");
+});
+$("return-lobby-btn").addEventListener("click", () => {
+  $("playagain-btn").disabled=true;$("return-lobby-btn").disabled=true;
+  socket.emit("game:restart");
+});
 $("leave-btn").addEventListener("click", async () => {
   const ok = await confirmDialog({ title: "Leave the room?", confirmLabel: "Leave", danger: true });
   if (!ok) return;
@@ -609,7 +670,7 @@ socket.on("round:question", (payload) => {
   sound.beep(700, 0.08);
 });
 socket.on("guess:accepted", ({ guess }) => {
-  sfx.play("confirm", { volume: .38, throttle: 120 });
+  if(state.mode!=="golf")sfx.play("confirm", { volume: .38, throttle: 120 });
   state.submitted = true;
   if (currentScreen === "map") {
     $("map-submit").disabled = true;
@@ -638,6 +699,7 @@ socket.on("turn:started", (payload) => {
 });
 socket.on("turn:update", (payload) => {
   if (payload.mode === "curling") updateCurling(payload);
+  else if(payload.mode==="golf")updateGolf(payload);
   else if (payload.mode === "bomb") updateBomb(payload);
 });
 socket.on("timeline:votes", ({ votes }) => { updateVotes(votes); });
@@ -676,6 +738,11 @@ socket.on("platformer:builders", ({ builders, pool }) => {
 });
 socket.on("platformer:race", applyPlatformerRace);
 socket.on("platformer:positions", ({ players }) => updatePlatformerPositions(players));
+socket.on("platformer:crumbled",({key})=>{
+  if(typeof key!=="string")return;platformer.crumbledTiles.add(key);
+  if(platformer.player?.surfaceKey===key)platformer.player.grounded=false;
+  drawPlatformer();
+});
 socket.on("platformer:progress", ({ done, total }) => {
   $("platformer-status").textContent = `${done} of ${total} racers finished`;
 });
@@ -750,16 +817,20 @@ socket.on("arena:eliminated", ({ playerId, reason }) => {
     p.eliminated = true;
     p.visualEliminatedAt ||= eliminatedAt;
     p.eliminationDirection ||= p.x < 360 ? -1 : 1;
+    if(arena.mode==="vanish")p.fellOutAt=eliminatedAt;
   }
   if(playerId===state.selfId&&arena.player){
     arena.player.visualEliminatedAt ||= eliminatedAt;
     arena.player.eliminationDirection ||= arena.player.x < 360 ? -1 : 1;
+    if(arena.mode==="vanish")arena.player.fellOutAt=eliminatedAt;
   }
   if (playerId === state.selfId) {
     arena.done = true;
     sfx.stopRoll(true);
     $("arena-status").textContent = reason === "exploded" ? "BOOM! You’re out." :
-      reason === "miss" ? "No hearts left—watch the remaining paddles!" : "You fell! Watch the survivors.";
+      reason === "miss" ? "No hearts left—watch the remaining paddles!" :
+      arena.mode === "vanish" ? "You fell through the final floor! Watch the survivors." : "You fell! Watch the survivors.";
+    if(arena.mode==="vanish")arena.fallOutFlash={at:eliminatedAt};
   }
   arena.bursts.push({x:p?.x||360,y:p?.y||220,born:performance.now(),color:reason==="lava"?"#fb923c":"#7dd3fc",count:18});
   const canvas=$("arena-canvas");canvas.classList.remove("shake");void canvas.offsetWidth;canvas.classList.add("shake");
@@ -796,7 +867,7 @@ socket.on("arena:bump", ({targetId,intensity,nx,ny,racing,impulses}) => {
 });
 socket.on("arena:layer", ({playerId,layer}) => {
   const p=arena.players.get(playerId);
-  if(p)p.layer=layer;
+  if(p){p.layer=layer;p.fellAt=performance.now();}
   if(playerId===state.selfId&&arena.player){
     arena.player.layer=layer;arena.player.fellAt=performance.now();
     arena.fallFlash={at:performance.now(),floor:layer+1};
@@ -920,10 +991,13 @@ socket.on("arena:pong-ball",({count})=>{
   sound.beep(720,.12,"square",.03);
 });
 socket.on("doors:choose", applyDoorsChoose);
-socket.on("doors:selected", ({ doorIndex }) => { doors.selected = doorIndex; renderDoors(); });
+socket.on("doors:selected", ({ doorIndex }) => { doors.selected=doorIndex;sfx.play("confirm",{volume:.35});$("doors-status").textContent="Lane locked — keep running!";renderDoors(); });
+socket.on("doors:route-revealed",({route})=>{doors.ownRoute=route;sound.beep(route==="straight"?760:route==="small"?480:220,.18,"triangle",.04);$("doors-status").textContent=route==="straight"?"CLEAR RUN!":route==="small"?"SMALL DETOUR!":"BIG DETOUR!";});
 socket.on("doors:progress", ({ chosen, total }) => { $("doors-status").textContent = `${chosen} of ${total} players chose`; });
 socket.on("doors:reveal", applyDoorsReveal);
-socket.on("doors:positions", ({players}) => updateDoorPlayers(players));
+socket.on("doors:positions", ({players,fireY}) => {updateDoorPlayers(players);if(Number.isFinite(fireY)){doors.fireY=fireY;doors.fireReceivedAt=performance.now();}});
+socket.on("doors:eliminated",({playerId})=>{const p=doors.players.get(playerId);if(p){p.eliminated=true;p.eliminatedAt=performance.now();}sfx.play("eliminated",{volume:playerId===state.selfId?.8:.42,rate:.82});sound.beep(92,.25,"sawtooth",.035);if(playerId===state.selfId){doors.done=true;$("doors-status").textContent="The fire caught you!";}});
+socket.on("doors:finished",({playerId,place})=>{const p=doors.players.get(playerId);if(p)p.finished=true;if(playerId===state.selfId){doors.done=true;$("doors-status").textContent=`Escaped in place ${place}!`;sound.happy();}});
 
 socket.on("round:results", (payload) => {
   stopTimer();
@@ -937,6 +1011,12 @@ socket.on("round:results", (payload) => {
     curlingVisual.pendingResults=payload;
     $("curling-input").classList.add("hidden");
     $("curling-wait").textContent="Final shot — watch it settle…";
+    return;
+  }
+  if(payload.mode==="golf"&&golfVisual.anim){
+    golfVisual.pendingResults=payload;
+    $("curling-input").classList.add("hidden");
+    $("curling-wait").textContent="Final ball — watch it settle…";
     return;
   }
   if (payload.mode === "bomb" && balloonActiveNow()) {
@@ -965,12 +1045,25 @@ socket.on("round:results", (payload) => {
 socket.on("arcade:intermission", (payload) => { renderIntermission(payload); showScreen("intermission"); });
 socket.on("battle:wheel-result", (payload) => animateBattleWheel(payload));
 let battleCountdownTimer=null;
-socket.on("battle:countdown",({mode,startsAt})=>{
+function showGameCountdown({mode,startsAt,label}){
+  music.pauseBackground(100);
   clearInterval(battleCountdownTimer);const overlay=$("game-countdown"),info=MODE_INFO[mode]||{};
-  $("game-countdown-name").textContent=`${info.emoji||""} ${info.name||mode} — GET READY`;
+  $("game-countdown-name").textContent=label||`${info.emoji||""} ${info.name||mode} — GET READY`;
   overlay.classList.remove("hidden");
-  const update=()=>{const left=Math.max(0,Math.ceil((startsAt-Date.now())/1000));$("game-countdown-value").textContent=left||"GO!";};
+  let lastTick=null;
+  const update=()=>{const left=Math.max(0,Math.ceil((startsAt-Date.now())/1000));$("game-countdown-value").textContent=left||"GO!";
+    if(left>0&&left!==lastTick){
+      lastTick=left;
+      // 3 and 2 share one steady pitch; 1 is the brighter final warning.
+      sound.beep(left===1?880:620,.085,"square",left===1?.055:.043);
+    }
+    if(!left){clearInterval(battleCountdownTimer);battleCountdownTimer=null;setTimeout(()=>overlay.classList.add("hidden"),450);}};
   update();battleCountdownTimer=setInterval(update,100);
+}
+socket.on("battle:countdown",({mode,startsAt})=>showGameCountdown({mode,startsAt}));
+socket.on("round:countdown",({mode,startsAt,roundNumber,totalRounds})=>{
+  const info=MODE_INFO[mode]||{};
+  showGameCountdown({mode,startsAt,label:`${info.emoji||""} ROUND ${roundNumber} OF ${totalRounds} — GET READY`});
 });
 socket.on("battle:started", ({legIndex,mode}) => {
   clearInterval(battleCountdownTimer);battleCountdownTimer=null;$("game-countdown").classList.add("hidden");
@@ -994,6 +1087,7 @@ socket.on("battle:ceremony-ended",({spinnerId,spinnerName})=>{
   const mySpin=spinnerId===state.selfId;
   if(mySpin)$("battle-spin-btn").classList.remove("hidden");
   showSpinAnnouncement(spinnerName||"Next player");
+  music.play("wheelSpin",450);
   sound.chord([440,587,740],.25);
 });
 
@@ -1026,6 +1120,7 @@ function paintBattleWheel(options = []) {
   const center=document.createElement("span");center.id="battle-wheel-center";center.className="battle-wheel-center";center.textContent="SPIN";
   wheel.appendChild(center);
 }
+let battleWheelTickRaf=0;
 function animateBattleWheel(payload) {
   const options = payload.options || [], selected = options.indexOf(payload.selectedMode), wheel = $("battle-wheel");
   paintBattleWheel(options);
@@ -1033,9 +1128,24 @@ function animateBattleWheel(payload) {
   wheel.style.transition = "none"; wheel.style.transform = "rotate(0deg)"; void wheel.offsetWidth;
   wheel.style.transition = "transform 3.15s cubic-bezier(.12,.72,.08,1)"; wheel.style.transform = `rotate(${rotation}deg)`;
   $("battle-spin-btn").classList.add("hidden"); $("battle-spinner-label").textContent = "The wheel is choosing…";
-  [80,150,220,295,375,460,555,660,780,915,1065,1235,1430,1650,1900,2180,2490,2760].forEach((delay,index) =>
-    sound.later(() => sfx.play("wheelTick", { volume: .3, rate: 1.12 - index * .018, throttle: 30 }), delay));
+  // Read the wheel's real rendered angle. This keeps every click attached to a
+  // sector boundary, including the very visible slow clicks near the end.
+  cancelAnimationFrame(battleWheelTickRaf);
+  let previousAngle=0,totalAngle=0,previousSector=0,started=performance.now();
+  const monitorTicks=()=>{
+    const matrix=new DOMMatrixReadOnly(getComputedStyle(wheel).transform);
+    const angle=Math.atan2(matrix.b,matrix.a)*180/Math.PI;
+    const delta=((angle-previousAngle+540)%360)-180;previousAngle=angle;totalAngle+=delta;
+    const sector=Math.floor((totalAngle+slice*.5)/slice);
+    if(sector!==previousSector){
+      previousSector=sector;sfx.play("wheelTick",{volume:.95,rate:1.02,throttle:18});sound.beep(390,.032,"square",.03);
+    }
+    if(performance.now()-started<3190)battleWheelTickRaf=requestAnimationFrame(monitorTicks);
+  };
+  battleWheelTickRaf=requestAnimationFrame(monitorTicks);
   setTimeout(() => {
+    cancelAnimationFrame(battleWheelTickRaf);battleWheelTickRaf=0;
+    music.pauseBackground(140);
     const info = MODE_INFO[payload.selectedMode] || {};
     $("battle-wheel-center").textContent = info.emoji || "🎮";
     $("inter-next").textContent = `${info.emoji || ""} ${info.name || payload.selectedMode}`;
@@ -1043,7 +1153,7 @@ function animateBattleWheel(payload) {
     $("battle-spinner-label").textContent = `${info.name || payload.selectedMode} selected`;
     sound.chord([523,659,784],.22);
     sfx.play("wheelStop",{volume:.58,throttle:500});
-  }, 2850);
+  }, 3200);
 }
 
 function renderIntermission(payload) {
@@ -1060,7 +1170,12 @@ function renderIntermission(payload) {
     const mySpin = payload.spinnerId === state.selfId;
     $("battle-spinner-label").textContent = mySpin ? "Your turn — give the wheel a spin!" : `${payload.spinnerName || "Another player"} gets to spin.`;
     const hasCeremony=!!payload.ceremonyPending&&winnerRows.length>0;
-    $("battle-spin-btn").classList.toggle("hidden", !mySpin||hasCeremony); $("battle-spin-btn").disabled = false;
+    const spinInProgress=!!payload.pendingMode&&!payload.awaitingSpin;
+    $("battle-spin-btn").classList.toggle("hidden", !mySpin||hasCeremony||!payload.awaitingSpin); $("battle-spin-btn").disabled = false;
+    if(spinInProgress){
+      $("battle-wheel-center").textContent="…";
+      $("battle-spinner-label").textContent="The wheel is already spinning…";
+    }
     $("inter-host-note").textContent = mySpin ? "" : "Everyone sees the same server-selected result.";
     const list = $("inter-standings"); list.innerHTML = "";
     (payload.standings || []).forEach((s,i) => {
@@ -1072,13 +1187,21 @@ function renderIntermission(payload) {
       const ceremony=$("star-ceremony");
       $("star-winner-avatar").innerHTML=winnerRows.map((s)=>avatarHtml(s.avatar)).join("");
       $("star-winner-name").textContent=winnerNames;
+      $("star-grants").innerHTML=winnerRows.map((s,i)=>
+        `<div class="star-grant" style="--grant-delay:${i*.16}s"><span>★</span><b>${esc(s.name)}</b><strong>+1 BATTLE STAR</strong></div>`).join("");
       $("star-proceed-btn").classList.toggle("hidden",!state.isHost);
       $("star-proceed-btn").disabled=false;
       $("star-proceed-wait").classList.toggle("hidden",state.isHost);
       ceremony.classList.remove("hidden");$("battle-wheel-wrap").classList.add("hidden");
       sound.chord([392,523,659,784],.45);music.stinger("star");
-    }else if(payload.first)showSpinAnnouncement(payload.spinnerName||"First player");
-    sound.chord([440,587,740],.3); return;
+    }else if(!spinInProgress){
+      // showScreen("intermission") runs directly after this renderer and first
+      // silences the previous game, so start the quiet waiting bed one task later.
+      setTimeout(()=>{if(currentScreen==="intermission")music.play("wheelSpin",450);},0);
+      if(payload.first)showSpinAnnouncement(payload.spinnerName||"First player");
+    }
+    if(!hasCeremony&&!spinInProgress)sound.chord([440,587,740],.3);
+    return;
   }
   $("battle-wheel-wrap").classList.add("hidden");
   const leg = (payload.legIndex ?? 0) + 1;
@@ -1185,10 +1308,10 @@ function renderModeCatalog(containerId, selected, onPick, multi = false) {
     modes.forEach((m) => {
       const info = MODE_INFO[m] || { name: m, emoji: "🎮" }, button = document.createElement("button");
       button.className = "mode-card" + (chosen.has(m) ? " selected" : "") + (panelName === "wip" ? " wip" : "");
-      button.disabled = !state.isHost;
+      button.disabled = !state.isHost||!!info.concept;
       button.innerHTML = `<span class="mode-card-icon">${info.emoji}</span><span><b>${esc(info.name)}</b><small>${esc(info.desc || "")}</small></span>`+
-        (multi && chosen.has(m) ? `<strong>✓</strong>` : "");
-      button.addEventListener("click", () => onPick(m)); panel.appendChild(button);
+        (info.concept?`<strong>PLANNED</strong>`:(multi && chosen.has(m) ? `<strong>✓</strong>` : ""));
+      if(!info.concept)button.addEventListener("click", () => onPick(m));panel.appendChild(button);
     });
   };
   fill("ready", ready); fill("wip", wip);
@@ -1196,7 +1319,7 @@ function renderModeCatalog(containerId, selected, onPick, multi = false) {
     const name = tab.dataset.tab;
     c.querySelectorAll(".mode-tab").forEach((x) => x.classList.toggle("active", x === tab));
     c.querySelectorAll(".mode-panel").forEach((x) => x.classList.toggle("hidden", x.dataset.panel !== name));
-    c.querySelector(".mode-tab-note").textContent = name === "ready" ? "Friend-test ready minigames." : "Playable prototypes that still need polish.";
+    c.querySelector(".mode-tab-note").textContent = name === "ready" ? "Friend-test ready minigames." : "Prototypes and planned modes still being built.";
   }));
 }
 
@@ -1395,11 +1518,11 @@ function applyTurn(payload) {
   $("turn-error").textContent = "";
   startTimer(payload.deadline, "turn-timer");
 
-  $("curling-area").classList.toggle("hidden", payload.mode !== "curling");
+  $("curling-area").classList.toggle("hidden", !["curling","golf"].includes(payload.mode));
   $("bomb-area").classList.toggle("hidden", payload.mode !== "bomb");
   $("timeline-area").classList.toggle("hidden", payload.mode !== "timeline");
 
-  if (payload.mode === "curling") {
+  if (payload.mode === "curling"||payload.mode==="golf") {
     $("turn-round-label").textContent = legPrefix() + `Round ${payload.roundNumber} of ${payload.totalRounds}`;
     state.unit = payload.question.unit || "";
     $("turn-category").textContent = payload.question.category || "";
@@ -1407,7 +1530,7 @@ function applyTurn(payload) {
     $("turn-unit").textContent = state.unit;
     $("turn-guess").value = "500";
     $("curling-power-value").textContent = "500";
-    updateCurling(payload);
+    if(payload.mode==="golf")updateGolf(payload);else updateCurling(payload);
   } else if (payload.mode === "bomb") {
     $("turn-round-label").textContent = legPrefix() + `Round ${payload.roundNumber} of ${payload.totalRounds}`;
     updateBomb(payload);
@@ -1602,8 +1725,15 @@ function renderOtherTimelines(timelines, activeId) {
 function updateCurling(payload) {
   const shotJustStarted=!!payload.trajectory?.length&&!curlingVisual.anim;
   if(payload.stones)curlingVisual.stones=payload.stones;
-  if(payload.trajectory?.length)curlingVisual.anim={frames:payload.trajectory,collisionFrames:payload.collisionFrames||[],playedCollisions:new Set(),offStoneIds:new Set((payload.trajectory[0]||[]).filter((s)=>s.off).map((s)=>s.stoneId)),started:performance.now()};
-  if(shotJustStarted)sfx.play("bump",{volume:.18,rate:1.15,throttle:200});
+  if(payload.trajectory?.length){
+    let peakStep=.001;
+    for(let i=1;i<payload.trajectory.length;i++)for(const stone of payload.trajectory[i]){
+      const prev=payload.trajectory[i-1].find((p)=>p.stoneId===stone.stoneId);
+      if(prev&&!stone.off&&!prev.off)peakStep=Math.max(peakStep,Math.hypot(stone.x-prev.x,stone.y-prev.y));
+    }
+    curlingVisual.anim={frames:payload.trajectory,peakStep,collisionFrames:payload.collisionFrames||[],playedCollisions:new Set(),offStoneIds:new Set((payload.trajectory[0]||[]).filter((s)=>s.off).map((s)=>s.stoneId)),started:performance.now()};
+  }
+  if(shotJustStarted)sfx.startCurlingSlide();
   if (payload.order) renderTurnOrder($("curling-order"), payload.order);
   const active = payload.order ? payload.order.find((o) => o.active) : null;
   const activeName = active ? active.name : payload.lastName;
@@ -1637,23 +1767,27 @@ function updateCurling(payload) {
 
 let curlingControl={stage:"idle",direction:0,power:0,started:0};
 let curlingVisual={shots:[],stones:[],anim:null,raf:0,pendingPayload:null,pendingResults:null};
+let golfVisual={balls:[],hole:{x:405,y:125},course:null,firstHoledPlayerId:null,celebratedPlayerId:null,fireworksAt:0,anim:null,raf:0,pendingPayload:null,pendingResults:null};
 function curlingDirection(now){return Math.sin((now-curlingControl.started)/430);}
 function curlingPower(now){return .08+.92*(.5+.5*Math.sin((now-curlingControl.started)/360));}
+function golfDirection(now){return -1+(((now-curlingControl.started)/3200)%1)*2;}
+function golfPower(now){return .015+.985*(.5+.5*Math.sin((now-curlingControl.started)/430));}
+function activeDirection(now){return state.mode==="golf"?golfDirection(now):curlingDirection(now);}
+function activePower(now){return state.mode==="golf"?golfPower(now):curlingPower(now);}
 function curlingPress(){
   if(!["direction","power"].includes(curlingControl.stage)||
       $("curling-input").classList.contains("hidden")||$("turn-submit").disabled)return;
   const canShowAim=!$("curling-input").classList.contains("hidden")&&!$("turn-submit").disabled;
   if(canShowAim&&curlingControl.stage==="direction"){
-    curlingControl.direction=curlingDirection(performance.now());curlingControl.stage="power";curlingControl.started=performance.now();
-    const degrees=Math.round(curlingControl.direction*18);
-    $("turn-submit").textContent="RELEASE STONE";$("curling-meter-status").textContent=`Direction locked: ${degrees===0?"STRAIGHT":`${Math.abs(degrees)}° ${degrees<0?"LEFT":"RIGHT"}`} — now stop the power`;
+    curlingControl.direction=activeDirection(performance.now());curlingControl.stage="power";curlingControl.started=performance.now();
+    const degrees=Math.round(curlingControl.direction*(state.mode==="golf"?180:18));
+    $("turn-submit").textContent=state.mode==="golf"?"HIT BALL":"RELEASE STONE";$("curling-meter-status").textContent=`Direction locked: ${degrees===0?"STRAIGHT":`${Math.abs(degrees)}° ${degrees<0?"LEFT":"RIGHT"}`} — now stop the power`;
     sound.beep(500,.07,"square",.025);return;
   }
   if(curlingControl.stage==="power"){
-    curlingControl.power=curlingPower(performance.now());curlingControl.stage="done";
-    $("turn-submit").disabled=true;$("curling-meter-status").textContent="Stone away!";
+    curlingControl.power=activePower(performance.now());curlingControl.stage="done";
+    $("turn-submit").disabled=true;$("curling-meter-status").textContent=state.mode==="golf"?"Ball away!":"Stone away!";
     socket.emit("guess:submit",{guess:{direction:curlingControl.direction,power:curlingControl.power}});
-    sound.beep(720,.1,"triangle",.03);
   }
 }
 function drawCurlingAim(ctx,direction,power=null,now=performance.now()){
@@ -1678,6 +1812,7 @@ function drawCurlingAim(ctx,direction,power=null,now=performance.now()){
   ctx.restore();
 }
 function drawCurlingRink(now=performance.now()){
+  if(state.mode==="golf")return drawGolfCourse(now);
   const canvas=$("curling-canvas"),ctx=canvas.getContext("2d");
   // Aim controls only belong to the local player while their shot is active.
   // Keep this in renderer scope: both aim branches and the RAF condition use it.
@@ -1712,6 +1847,13 @@ function drawCurlingRink(now=performance.now()){
   if(curlingVisual.anim){
     const frameMs=25,settleHold=1200,age=now-curlingVisual.anim.started;
     const index=Math.min(curlingVisual.anim.frames.length-1,Math.floor(age/frameMs));
+    const previousFrame=curlingVisual.anim.frames[Math.max(0,index-1)]||[];
+    let currentStep=0;
+    for(const stone of curlingVisual.anim.frames[index]||[]){
+      const prev=previousFrame.find((p)=>p.stoneId===stone.stoneId);
+      if(prev&&!stone.off&&!prev.off)currentStep=Math.max(currentStep,Math.hypot(stone.x-prev.x,stone.y-prev.y));
+    }
+    sfx.setCurlingSlide(currentStep/curlingVisual.anim.peakStep);
     for(const collisionIndex of curlingVisual.anim.collisionFrames||[]){
       if(collisionIndex<=index&&!curlingVisual.anim.playedCollisions.has(collisionIndex)){
         curlingVisual.anim.playedCollisions.add(collisionIndex);
@@ -1721,10 +1863,13 @@ function drawCurlingRink(now=performance.now()){
     stones=curlingVisual.anim.frames[index]||stones;animating=index<curlingVisual.anim.frames.length-1;
     for(const stone of stones)if(stone.off&&!curlingVisual.anim.offStoneIds.has(stone.stoneId)){
       curlingVisual.anim.offStoneIds.add(stone.stoneId);
-      sfx.play("stoneOff",{volume:.5,rate:.82+Math.random()*.1,throttle:100});
+      sfx.play("stoneOff",{volume:.82,rate:.82+Math.random()*.1,throttle:100});
+      sound.beep(210,.16,"triangle",.035);
+      sound.later(()=>sound.beep(125,.2,"sine",.028),90);
     }
     if(!animating&&age<curlingVisual.anim.frames.length*frameMs+settleHold)animating=true;
     if(!animating){
+      sfx.stopCurlingSlide();
       curlingVisual.anim=null;
       const results=curlingVisual.pendingResults;curlingVisual.pendingResults=null;
       const pending=curlingVisual.pendingPayload;curlingVisual.pendingPayload=null;
@@ -1757,6 +1902,76 @@ function drawCurlingRink(now=performance.now()){
     curlingVisual.raf=requestAnimationFrame(drawCurlingRink);
 }
 
+function updateGolf(payload){
+  const shotJustStarted=!!payload.trajectory?.length&&!golfVisual.anim;
+  if(payload.balls&&!golfVisual.anim)golfVisual.balls=payload.balls;
+  if(payload.hole)golfVisual.hole=payload.hole;
+  if(payload.course)golfVisual.course=payload.course;
+  if(payload.firstHoledPlayerId)golfVisual.firstHoledPlayerId=payload.firstHoledPlayerId;
+  if(payload.trajectory?.length){golfVisual.anim={frames:payload.trajectory,wallFrames:payload.wallFrames||[],collisionFrames:payload.collisionFrames||[],playedWalls:new Set(),playedCollisions:new Set(),started:performance.now()};golfVisual.balls=payload.trajectory[0]||golfVisual.balls;}
+  else if(golfVisual.anim)golfVisual.pendingPayload=payload;
+  if(shotJustStarted){sfx.play("golfHit",{volume:.7,rate:1.18});sfx.startCurlingSlide();}
+  if(payload.order)renderTurnOrder($("curling-order"),payload.order);
+  const active=payload.order?.find((o)=>o.active);
+  const myTurn=!!active&&active.playerId===state.selfId&&!active.holed&&!golfVisual.anim&&!payload.trajectory;
+  if(myTurn){
+    $("curling-input").classList.remove("hidden");$("turn-submit").disabled=false;$("curling-wait").textContent="";
+    if(curlingControl.stage==="idle"||curlingControl.stage==="done"){
+      curlingControl={stage:"direction",direction:0,power:0,started:performance.now()};
+      $("turn-submit").textContent="LOCK DIRECTION";$("curling-meter-status").textContent="Stop the aim, then stop the power";
+    }
+  }else{
+    $("curling-input").classList.add("hidden");
+    $("curling-wait").textContent=golfVisual.anim?"Watch the ball ricochet…":active?`${active.name} is furthest from the hole — their shot…`:"Waiting…";
+    if(["direction","power"].includes(curlingControl.stage))curlingControl.stage="idle";
+  }
+  cancelAnimationFrame(golfVisual.raf);drawGolfCourse();
+}
+
+function drawGolfCourse(now=performance.now()){
+  const canvas=$("curling-canvas"),ctx=canvas.getContext("2d"),canAim=!$("curling-input").classList.contains("hidden")&&!$("turn-submit").disabled;
+  ctx.clearRect(0,0,500,680);ctx.fillStyle="#16281e";ctx.fillRect(0,0,500,680);
+  ctx.fillStyle="#315b3d";for(let y=18;y<680;y+=32)for(let x=(y/32)%2?12:28;x<500;x+=44){ctx.beginPath();ctx.arc(x,y,2,0,Math.PI*2);ctx.fill();}
+  const grass=ctx.createLinearGradient(55,0,445,0);grass.addColorStop(0,"#7bc96f");grass.addColorStop(.5,"#9ddd78");grass.addColorStop(1,"#70bd65");
+  const course=golfVisual.course||{name:"Corner Bank",rects:[{x:55,y:65,w:390,h:150},{x:55,y:65,w:130,h:575}],obstacles:[]};
+  // Paint the union twice instead of stroking every component. The expanded
+  // underlay becomes one continuous rim and overlapping pieces hide their
+  // internal construction seams.
+  ctx.fillStyle="rgba(232,255,216,.62)";for(const rect of course.rects){ctx.beginPath();ctx.roundRect(rect.x-4,rect.y-4,rect.w+8,rect.h+8,29);ctx.fill();}
+  ctx.fillStyle=grass;for(const rect of course.rects){ctx.beginPath();ctx.roundRect(rect.x,rect.y,rect.w,rect.h,25);ctx.fill();}
+  for(const obstacle of course.obstacles||[]){ctx.fillStyle="#365247";ctx.strokeStyle="#d9f99d";ctx.lineWidth=4;ctx.beginPath();ctx.roundRect(obstacle.x,obstacle.y,obstacle.w,obstacle.h,12);ctx.fill();ctx.stroke();
+    ctx.fillStyle="rgba(255,255,255,.14)";ctx.beginPath();ctx.roundRect(obstacle.x+7,obstacle.y+7,obstacle.w-14,8,4);ctx.fill();}
+  ctx.fillStyle="rgba(8,47,28,.74)";ctx.beginPath();ctx.roundRect(165,24,170,28,14);ctx.fill();ctx.fillStyle="#ecfccb";ctx.font="900 12px sans-serif";ctx.textAlign="center";ctx.fillText(course.name||"RICOCHET GOLF",250,43);
+  const hole=golfVisual.hole||{x:405,y:125};ctx.fillStyle="rgba(0,0,0,.65)";ctx.beginPath();ctx.ellipse(hole.x,hole.y,14,8,0,0,Math.PI*2);ctx.fill();
+  ctx.strokeStyle="#f8fafc";ctx.lineWidth=4;ctx.beginPath();ctx.moveTo(hole.x,hole.y);ctx.lineTo(hole.x,hole.y-65);ctx.stroke();ctx.fillStyle="#ef4444";ctx.beginPath();ctx.moveTo(hole.x,hole.y-65);ctx.lineTo(hole.x+34,hole.y-52);ctx.lineTo(hole.x,hole.y-40);ctx.fill();
+  let balls=golfVisual.balls||[],animating=false;
+  if(golfVisual.anim){
+    const frameMs=25,hold=golfVisual.fireworksAt?1900:650,age=now-golfVisual.anim.started,index=Math.min(golfVisual.anim.frames.length-1,Math.floor(age/frameMs));
+    balls=golfVisual.anim.frames[index]||balls;golfVisual.balls=balls;animating=index<golfVisual.anim.frames.length-1||age<golfVisual.anim.frames.length*frameMs+hold;
+    if(golfVisual.firstHoledPlayerId&&!golfVisual.celebratedPlayerId&&balls.some((b)=>b.playerId===golfVisual.firstHoledPlayerId&&b.holed)){
+      golfVisual.celebratedPlayerId=golfVisual.firstHoledPlayerId;golfVisual.fireworksAt=now;sound.happy();
+    }
+    for(const hit of golfVisual.anim.wallFrames)if(hit<=index&&!golfVisual.anim.playedWalls.has(hit)){golfVisual.anim.playedWalls.add(hit);sfx.play("golfWall",{volume:.38,rate:1.05,throttle:55});}
+    for(const hit of golfVisual.anim.collisionFrames)if(hit<=index&&!golfVisual.anim.playedCollisions.has(hit)){golfVisual.anim.playedCollisions.add(hit);sfx.play("golfHit",{volume:.52,rate:.92,throttle:55});}
+    if(!animating){sfx.stopCurlingSlide();golfVisual.anim=null;const results=golfVisual.pendingResults;golfVisual.pendingResults=null;const pending=golfVisual.pendingPayload;golfVisual.pendingPayload=null;
+      if(results)queueMicrotask(()=>{renderResults(results);showScreen("results");sound.beep(880,.14,"triangle");});else if(pending)queueMicrotask(()=>updateGolf(pending));}
+  }
+  balls.forEach((b,i)=>{if(b.holed)return;const players=Array.isArray(state.room?.players)?state.room.players:[],player=players.find((p)=>p.id===b.playerId);
+    ctx.fillStyle="rgba(0,0,0,.25)";ctx.beginPath();ctx.ellipse(b.x+3,b.y+6,13,6,0,0,Math.PI*2);ctx.fill();ctx.fillStyle=player?.avatar?.color||["#fff","#fde047","#60a5fa","#fb7185"][i%4];ctx.strokeStyle="#fff";ctx.lineWidth=2;ctx.beginPath();ctx.arc(b.x,b.y,11,0,Math.PI*2);ctx.fill();ctx.stroke();
+    ctx.fillStyle="#12221a";ctx.font="900 9px sans-serif";ctx.textAlign="center";ctx.fillText(player?.name?.slice(0,2).toUpperCase()||i+1,b.x,b.y+3);});
+  if(golfVisual.fireworksAt){const age=now-golfVisual.fireworksAt;if(age<1800){const colors=["#facc15","#fb7185","#60a5fa","#4ade80","#fff"];
+    for(let burst=0;burst<4;burst++){const progress=(age-burst*230)/1050;if(progress<0||progress>1)continue;const cx=hole.x+(burst-1.5)*48,cy=hole.y-45-(burst%2)*35;
+      for(let i=0;i<16;i++){const angle=i*Math.PI*2/16+burst*.45,distance=progress*(34+burst*7);ctx.globalAlpha=1-progress;ctx.fillStyle=colors[(i+burst)%colors.length];ctx.beginPath();ctx.arc(cx+Math.cos(angle)*distance,cy+Math.sin(angle)*distance+progress*progress*20,3,0,Math.PI*2);ctx.fill();}}
+    ctx.globalAlpha=1;animating=true;}else golfVisual.fireworksAt=0;}
+  if(canAim&&["direction","power"].includes(curlingControl.stage)){
+    const active=balls.find((b)=>b.playerId===state.selfId)||balls[0];if(active){const dir=curlingControl.stage==="direction"?golfDirection(now):curlingControl.direction,power=curlingControl.stage==="power"?golfPower(now):.5;
+      const base=Math.atan2(hole.y-active.y,hole.x-active.x),angle=base+dir*Math.PI,len=55+power*90,tx=active.x+Math.cos(angle)*len,ty=active.y+Math.sin(angle)*len;
+      ctx.strokeStyle="#fff";ctx.lineWidth=3;ctx.setLineDash([6,7]);ctx.beginPath();ctx.moveTo(active.x,active.y);ctx.lineTo(tx,ty);ctx.stroke();ctx.setLineDash([]);ctx.fillStyle="#fff";ctx.beginPath();ctx.moveTo(tx,ty);ctx.lineTo(tx-Math.cos(angle-.55)*17,ty-Math.sin(angle-.55)*17);ctx.lineTo(tx-Math.cos(angle+.55)*17,ty-Math.sin(angle+.55)*17);ctx.fill();
+      if(curlingControl.stage==="power"){ctx.fillStyle="rgba(8,15,30,.9)";ctx.fillRect(55,650,390,22);ctx.fillStyle="#facc15";ctx.fillRect(55,650,390*power,22);}}
+  }
+  if(animating||(canAim&&["direction","power"].includes(curlingControl.stage)))golfVisual.raf=requestAnimationFrame(drawGolfCourse);
+}
+
 function renderShots(shots) {
   curlingVisual.shots=shots;
   const list = $("shot-list");
@@ -1777,8 +1992,10 @@ function renderTurnOrder(el, order) {
     if (o.active) cls.push("active");
     if (o.done) cls.push("done");
     if (o.connected === false) cls.push("gone");
-    const stones=Number.isFinite(o.stonesThrown)?` · ${o.stonesThrown}/${o.stonesTotal}`:"";
-    return `<span class="${cls.join(" ")}">${esc(o.name)}${stones}</span>`;
+    const progress=Number.isFinite(o.stonesThrown)?` · ${o.stonesThrown}/${o.stonesTotal}`:
+      Number.isFinite(o.shots)?` · ${o.shots} shot${o.shots===1?"":"s"}`:"";
+    const status=o.holed?" · ⛳ HOLED":"";
+    return `<span class="${cls.join(" ")}">${esc(o.name)}${progress}${status}</span>`;
   }).join("");
 }
 
@@ -1788,6 +2005,7 @@ function updateBomb(payload) {
   balloon.popped = false;
   const fresh = (total === 0); // a fresh, empty balloon this round
   if (fresh) {
+    if(balloon.raf)cancelAnimationFrame(balloon.raf);balloon.raf=null;
     balloon.shown = 0; balloon.shownTarget = 0; balloon.pumps = 0; balloon.active = null;
     balloon.pumpBacklog.length = 0; balloon.pendingPop = null; balloon.burst = null;
     balloon.line = []; // rebuilt below by bombSyncLine
@@ -1813,7 +2031,7 @@ function updateBomb(payload) {
     const activePlayer = active && state.room ? state.room.players.find((p) => p.id === active.playerId) : null;
     if (activePlayer && activePlayer.avatar) balloon.color = activePlayer.avatar.color;
     bombSyncLine(fresh);
-    drawBalloon();
+    drawBalloon();requestAnimationFrame(()=>{if(balloonActiveNow()){drawBalloon();startBalloonLoop();}});
   } else {
     // turn:update — a pump happened. Derive WHO pumped (whoever's turn it was)
     // and HOW MANY from the change in total, so it works even when the payload
@@ -2073,8 +2291,7 @@ function startBurst(a) {
   balloon.shownTarget = (balloon.pumps || 0) + 4; // brief visual over-inflate only
   balloon.burst = { t: 0 };
   balloon.burstResolveAt = performance.now() + 850;
-  sound.beep(150, 0.2, "sawtooth", 0.05);
-  sound.later(() => sound.beep(90, 0.14, "square", 0.06), 130);
+  sfx.balloonPop();
   if (navigator.vibrate) navigator.vibrate([40, 30, 80]);
 }
 
@@ -2904,7 +3121,7 @@ const platformer = {
   phase: null, view: null, selected: null, locked: false, raf: 0,
   keys: { left: false, right: false, jump: false }, player: null, startedAt: 0, done: false,
   remotePlayers: new Map(), lastPositionSent: 0, lastHoverSent: 0, hover: null,
-  maps:[],mapVotes:{},votedPlayerIds:[],rouletteTimer:null
+  maps:[],mapVotes:{},votedPlayerIds:[],rouletteTimer:null,crumbledTiles:new Set()
 };
 
 function applyPlatformerMapVote(payload) {
@@ -2932,11 +3149,12 @@ function renderPlatformerMapVotes() {
     const ctx=canvas.getContext("2d"),theme=map.theme||{};
     const grad=ctx.createLinearGradient(0,0,0,140);grad.addColorStop(0,theme.skyTop||"#7dd3fc");grad.addColorStop(1,theme.skyBottom||"#dbeafe");
     ctx.fillStyle=grad;ctx.fillRect(0,0,240,140);ctx.fillStyle=theme.void||"#312e81";ctx.fillRect(0,110,240,30);
+    const previewScale=240/(map.cols||24);
     (map.preview||[]).forEach(([c,r,type])=>{
       ctx.fillStyle=type==="ice"?"#67e8f9":type==="crumble"?"#f59e0b":type==="bouncy"?"#4ade80":"#64748b";
-      ctx.fillRect(c*10,r*10,10,10);
+      ctx.fillRect(c*previewScale,r*10,previewScale+.4,10);
     });
-    ctx.fillStyle="#facc15";ctx.fillRect(200,85,3,25);
+    ctx.fillStyle="#facc15";ctx.fillRect(26*previewScale,85,3,25);
     const title=document.createElement("strong");title.textContent=`${map.emoji} ${map.name}`;
     const desc=document.createElement("small");desc.textContent=map.description;
     const count=document.createElement("span");count.className="map-vote-count";count.textContent=platformer.mapVotes[map.id]||0;
@@ -3032,9 +3250,10 @@ function updatePlatformerLock() {
 $("platformer-canvas").addEventListener("click", (e) => {
   if (platformer.phase !== "build" || platformer.locked || !platformer.selected) return;
   const canvas = $("platformer-canvas"), r = canvas.getBoundingClientRect(), l = platformer.view.level;
+  const col=Math.floor((e.clientX-r.left)/r.width*l.cols),row=Math.floor((e.clientY-r.top)/r.height*l.rows);
+  if(col<=4){$("platformer-status").textContent="Spawn zone protected — build beyond the guardrail.";return;}
   socket.emit("platformer:place", {
-    col: Math.floor((e.clientX-r.left)/r.width*l.cols),
-    row: Math.floor((e.clientY-r.top)/r.height*l.rows),
+    col,row,
     type: platformer.selected
   });
 });
@@ -3123,27 +3342,33 @@ function drawPlatformer(player = platformer.player) {
   });
   for (const [key, type] of Object.entries(tiles)) {
     const [c, r] = key.split(",").map(Number), x = c*s, y = r*s;
-    if(player?.brokenTiles?.has(key)) continue;
+    if(platformer.crumbledTiles.has(key)||player?.brokenTiles?.has(key)) continue;
     drawPlatformerTile(ctx,type,x,y,s);
   }
 
   // A visible construction grid makes valid placement cells unambiguous.
   if (platformer.phase === "build") {
     ctx.save();
+    // A clearly fenced start box keeps traps and blocks away from every racer.
+    ctx.fillStyle="rgba(250,204,21,.13)";ctx.fillRect(0,0,5*s,level.rows*s);
+    ctx.strokeStyle="rgba(250,204,21,.95)";ctx.lineWidth=5;ctx.setLineDash([12,8]);
+    ctx.beginPath();ctx.moveTo(5*s,0);ctx.lineTo(5*s,level.rows*s);ctx.stroke();ctx.setLineDash([]);
+    ctx.fillStyle="rgba(15,23,42,.86)";ctx.font="900 13px sans-serif";ctx.textAlign="center";
+    ctx.fillText("PROTECTED SPAWN",2.5*s,28);
     ctx.strokeStyle="rgba(15,23,42,.34)";ctx.lineWidth=1;
     for(let c=0;c<=level.cols;c++){ctx.beginPath();ctx.moveTo(c*s+.5,0);ctx.lineTo(c*s+.5,level.rows*s);ctx.stroke();}
     for(let r=0;r<=level.rows;r++){ctx.beginPath();ctx.moveTo(0,r*s+.5);ctx.lineTo(level.cols*s,r*s+.5);ctx.stroke();}
 
     const h=platformer.hover;
     if (h && !platformer.locked && platformer.selected) {
-      const key=`${h.col},${h.row}`,occupied=!!tiles[key], x=h.col*s, y=h.row*s;
+      const key=`${h.col},${h.row}`,occupied=!!tiles[key],spawnProtected=h.col<=4,x=h.col*s,y=h.row*s;
       const removable=(platformer.view.removableTiles||[]).includes(key)||
         (platformer.view.placements||[]).some((p)=>p.type!=="demolition"&&p.col===h.col&&p.row===h.row);
       const demolition=platformer.selected==="bombtrap";
       ctx.globalAlpha=.72;
-      if (demolition&&removable) {
+      if (demolition&&removable&&!spawnProtected) {
         drawPlatformerTile(ctx,"bombtrap",x+1,y+1,s-2,.9);
-      } else if (occupied || demolition) {
+      } else if (occupied || demolition || spawnProtected) {
         ctx.fillStyle="#ef4444";ctx.fillRect(x+2,y+2,s-4,s-4);
         ctx.globalAlpha=.9;ctx.strokeStyle="#fecaca";ctx.lineWidth=4;
         ctx.beginPath();ctx.moveTo(x+10,y+10);ctx.lineTo(x+s-10,y+s-10);
@@ -3151,7 +3376,7 @@ function drawPlatformer(player = platformer.player) {
       } else {
         drawPlatformerTile(ctx,platformer.selected,x+1,y+1,s-2,.82);
       }
-      ctx.globalAlpha=.95;ctx.strokeStyle=(demolition&&!removable)||(!demolition&&occupied)?"#fecaca":demolition?"#4ade80":"#fff";ctx.lineWidth=3;
+      ctx.globalAlpha=.95;ctx.strokeStyle=spawnProtected||(demolition&&!removable)||(!demolition&&occupied)?"#fecaca":demolition?"#4ade80":"#fff";ctx.lineWidth=3;
       ctx.strokeRect(x+1.5,y+1.5,s-3,s-3);
     }
 
@@ -3231,6 +3456,7 @@ function applyPlatformerRace(payload) {
   $("platformer-map-vote").classList.add("hidden");
   document.querySelector(".platformer-wrap").classList.remove("hidden");
   platformer.phase = "race"; platformer.view = payload; platformer.done = !!payload.alreadyDone;
+  platformer.crumbledTiles=new Set(payload.crumbledTiles||[]);
   platformer.remotePlayers = new Map();
   updatePlatformerPositions(payload.players || []);
   platformer.lastPositionSent = 0;
@@ -3272,7 +3498,7 @@ function platformerSolid(type) {
 }
 
 function platformerTileAt(tiles,key,p) {
-  return p?.brokenTiles?.has(key) ? null : tiles[key];
+  return platformer.crumbledTiles.has(key)||p?.brokenTiles?.has(key) ? null : tiles[key];
 }
 
 function platformerSpikeHit(p, tiles, s) {
@@ -3318,7 +3544,10 @@ function stepPlatformer(dt) {
     return;
   }
   for(const [key,breakAt] of p.crumbleTimers){
-    if(now>=breakAt){p.brokenTiles.add(key);p.crumbleTimers.delete(key);if(p.surfaceKey===key)p.grounded=false;}
+    if(now>=breakAt){
+      platformer.crumbledTiles.add(key);p.brokenTiles.add(key);p.crumbleTimers.delete(key);
+      socket.emit("platformer:crumble",{key});if(p.surfaceKey===key)p.grounded=false;
+    }
   }
   if (p.grounded) p.coyoteUntil = now + 110;
   if(p.grounded&&p.surfaceType==="conveyor")p.vx+=95*dt;
@@ -3385,7 +3614,11 @@ function stepPlatformer(dt) {
     platformer.lastPositionSent=now;
     socket.emit("platformer:position",{x:p.x,y:p.y,vx:p.vx,vy:p.vy});
   }
-  if (p.x+p.w >= l.goal.x0 && p.y+p.h <= l.goal.y+10) return finishPlatformer("goal");
+  // Winning requires actual contact with the visible flag, not merely crossing
+  // the vertical grid column where it is planted.
+  const flag={x:l.goal.x0,y:l.goal.y-70,w:41,h:70};
+  if(p.x < flag.x+flag.w && p.x+p.w > flag.x && p.y < flag.y+flag.h && p.y+p.h > flag.y)
+    return finishPlatformer("goal");
   if (p.y > l.rows*s+50) finishPlatformer("dead");
 }
 
@@ -3473,14 +3706,19 @@ const RACE_TRACKS={
   square:{name:"Block Circuit",width:92,points:[[130,90],[590,90],[640,140],[640,320],[590,370],[130,370],[80,320],[80,140]],
     checkpoints:[[640,230],[360,370],[80,230],[360,90]]},
   swing:{name:"Wiggly Way",width:82,points:[[110,100],[310,70],[520,105],[630,190],[540,260],[630,350],[390,375],[250,310],[90,350],[120,220],[260,205]],
-    checkpoints:[[575,148],[585,305],[320,343],[105,285],[210,85]]}
+    checkpoints:[[575,148],[585,305],[320,343],[105,285],[210,85]]},
+  harbor:{name:"Harbor Hook",width:78,points:[[105,105],[315,72],[565,96],[642,165],[570,225],[640,310],[535,378],[270,365],[82,305],[148,220],[78,150]],
+    checkpoints:[[611,138],[605,337],[285,369],[105,270],[225,86]]},
+  oval:{name:"Grand Oval",width:84,points:[[360,70],[465,78],[555,105],[620,150],[650,220],[620,290],[555,335],[465,362],[360,370],[255,362],[165,335],[100,290],[70,220],[100,150],[165,105],[255,78]],
+    checkpoints:[[635,185],[570,325],[360,370],[150,325],[85,185],[360,70]]}
 };
 function raceGateNormal(track,gate){
-  let best={distance:Infinity,nx:0,ny:1};
+  let best={distance:Infinity,nx:0,ny:1,x:gate[0],y:gate[1]};
   for(let i=0;i<track.points.length;i++){
     const a=track.points[i],b=track.points[(i+1)%track.points.length],dx=b[0]-a[0],dy=b[1]-a[1],length=Math.hypot(dx,dy)||1;
     const distance=pointSegmentDistance(gate[0],gate[1],a[0],a[1],b[0],b[1]);
-    if(distance<best.distance)best={distance,nx:-dy/length,ny:dx/length};
+    const t=Math.max(0,Math.min(1,((gate[0]-a[0])*dx+(gate[1]-a[1])*dy)/(length*length)));
+    if(distance<best.distance)best={distance,nx:-dy/length,ny:dx/length,x:a[0]+dx*t,y:a[1]+dy*t};
   }
   return best;
 }
@@ -3560,7 +3798,7 @@ function applyArenaStart(payload) {
   arena.done = !!me?.eliminated;
   $("arena-round").textContent = legPrefix() + `Round ${payload.roundNumber} of ${payload.totalRounds}`;
   const names = {colorfloor:"Color Twister",vanish:"Vanishing Grid — "+(arena.vmap?arena.vmap.name:arena.vanishTheme.name),
-    bombpass:"Bomb Pass",fire:"Playing with Fire",racing:"Pocket Racers",flappy:"Dragon Rider",runner:"Wild Run",painter:"Territory Painter",pong:"Polygon Pong"};
+    bombpass:"Bomb Pass",fire:"Blast Brawl",racing:"Pocket Racers",flappy:"Dragon Rider",runner:"Wild Run",painter:"Territory Painter",pong:"Polygon Pong"};
   const hints = {
     colorfloor:"RUN TO THE COLOR ON THE BIG SIGN. Every other tile becomes lava!",
     vanish:"Keep moving. A tile disappears shortly after anyone steps on it.",
@@ -3980,12 +4218,12 @@ function drawRaceArena(now){
   // Visible checkpoint gates. The final gate is the finish line and spans the
   // complete road width instead of being a small decoration near its centre.
   track.checkpoints.forEach((gate,index)=>{
-    const {nx,ny}=raceGateNormal(track,gate);
+    const {nx,ny,x:gx,y:gy}=raceGateNormal(track,gate);
     const half=track.width/2+3,active=index===(arena.player?.checkpoint||0);
     ctx.save();ctx.strokeStyle=index===track.checkpoints.length-1?"#fff":(active?"#facc15":"rgba(56,189,248,.55)");
     ctx.lineWidth=index===track.checkpoints.length-1?8:4;ctx.setLineDash(index===track.checkpoints.length-1?[8,8]:[5,7]);
-    ctx.beginPath();ctx.moveTo(gate[0]-nx*half,gate[1]-ny*half);ctx.lineTo(gate[0]+nx*half,gate[1]+ny*half);ctx.stroke();ctx.restore();
-    if(index<track.checkpoints.length-1){ctx.fillStyle=active?"#fef08a":"#bae6fd";ctx.font="900 10px sans-serif";ctx.textAlign="center";ctx.fillText(String(index+1),gate[0],gate[1]-10);}
+    ctx.beginPath();ctx.moveTo(gx-nx*half,gy-ny*half);ctx.lineTo(gx+nx*half,gy+ny*half);ctx.stroke();ctx.restore();
+    if(index<track.checkpoints.length-1){ctx.fillStyle=active?"#fef08a":"#bae6fd";ctx.font="900 10px sans-serif";ctx.textAlign="center";ctx.fillText(String(index+1),gx,gy-10);}
   });
   const start=track.checkpoints.at(-1);
   // Finish flags stay visible; the first finisher launches a brief celebration.
@@ -4096,29 +4334,36 @@ function drawFlappyArena(now){
   };
   const me=arena.player,ownInfo=state.room?.players?.find(q=>q.id===state.selfId);
   const selfDead=!!arena.players.get(state.selfId)?.eliminated;
-  if(me){
-    drawDragonRider(150,me.y*scaleY,me,ownInfo?.avatar?.color||"#22c55e",1.2,selfDead,ownInfo);
-    ctx.fillStyle=selfDead?"#bae6fd":"#fff";ctx.font="900 13px sans-serif";ctx.textAlign="center";
-    ctx.fillText(selfDead?"YOUR GHOST":"YOU",150,me.y*scaleY-30);
+  const living=[...arena.players.entries()].filter(([,p])=>!p.eliminated)
+    .sort((a,b)=>(b[1].distance||0)-(a[1].distance||0));
+  const watchedId=selfDead&&living.length?living[0][0]:state.selfId;
+  const watchedRemote=arena.players.get(watchedId),watched=watchedId===state.selfId?me:watchedRemote;
+  const watchedInfo=state.room?.players?.find(q=>q.id===watchedId);
+  if(watched){
+    const watchedDead=!!watchedRemote?.eliminated;
+    drawDragonRider(150,watched.y*scaleY,watched,watchedInfo?.avatar?.color||"#22c55e",1.2,watchedDead,watchedInfo);
+    ctx.fillStyle=watchedDead?"#bae6fd":"#fff";ctx.font="900 13px sans-serif";ctx.textAlign="center";
+    const watchedName=watchedRemote?.name||watchedInfo?.name||"Leader";
+    ctx.fillText(watchedId===state.selfId?(selfDead?"YOUR GHOST":"YOU"):`WATCHING ${watchedName.toUpperCase()}`,150,watched.y*scaleY-30);
   }
   // Friends live in a separate compact telemetry strip, so they never obscure
   // the player's tab or the next pop-up gap.
   ctx.fillStyle="#07111f";ctx.fillRect(0,playH,720,90);ctx.strokeStyle="#38bdf8";ctx.lineWidth=2;ctx.beginPath();ctx.moveTo(0,playH);ctx.lineTo(720,playH);ctx.stroke();
   ctx.fillStyle="#93c5fd";ctx.font="900 11px sans-serif";ctx.textAlign="left";ctx.fillText("FRIENDS",14,playH+17);
-  const friends=[...arena.players.entries()].filter(([id])=>id!==state.selfId);
+  const friends=[...arena.players.entries()].filter(([id])=>id!==watchedId);
   const laneW=Math.min(205,690/Math.max(1,friends.length));
   friends.forEach(([id,remote],index)=>{
-    const info=state.room?.players?.find(q=>q.id===id),x=15+laneW*index,alive=!remote.eliminated;
-    ctx.fillStyle=alive?"rgba(30,64,175,.38)":"rgba(51,65,85,.42)";
+    const info=state.room?.players?.find(q=>q.id===id),x=15+laneW*index,alive=!remote.eliminated,bleak=selfDead;
+    ctx.fillStyle=alive&&!bleak?"rgba(30,64,175,.38)":"rgba(51,65,85,.42)";
     ctx.beginPath();ctx.roundRect(x,playH+25,laneW-8,52,10);ctx.fill();
-    ctx.fillStyle=alive?(info?.avatar?.color||remote.avatar?.color||"#38bdf8"):"#94a3b8";
+    ctx.fillStyle=alive&&!bleak?(info?.avatar?.color||remote.avatar?.color||"#38bdf8"):"#94a3b8";
     ctx.beginPath();ctx.arc(x+18,playH+51,7,0,Math.PI*2);ctx.fill();
-    ctx.fillStyle=alive?"#f8fafc":"#94a3b8";ctx.font="bold 11px sans-serif";ctx.textAlign="left";
-    ctx.fillText(`${alive?"":"👻 "}${remote.name||info?.name||""}`,x+31,playH+46);
-    ctx.fillStyle=alive?"#7dd3fc":"#cbd5e1";ctx.font="900 12px sans-serif";
+    ctx.fillStyle=alive&&!bleak?"#f8fafc":"#94a3b8";ctx.font="bold 11px sans-serif";ctx.textAlign="left";
+    ctx.fillText(`${(!alive||bleak)?"👻 ":""}${id===state.selfId?"You":(remote.name||info?.name||"")}`,x+31,playH+46);
+    ctx.fillStyle=alive&&!bleak?"#7dd3fc":"#cbd5e1";ctx.font="900 12px sans-serif";
     ctx.fillText(`${Math.floor((remote.distance||0)/10)} m${alive?"":" · crashed"}`,x+31,playH+64);
   });
-  const metres=Math.floor((arena.player?.distance||progress)/10);
+  const metres=Math.floor((watched?.distance||progress)/10);
   ctx.fillStyle="rgba(8,15,30,.78)";ctx.fillRect(15,14,170,34);ctx.fillStyle="#fff";ctx.font="900 17px sans-serif";ctx.textAlign="left";
   ctx.fillText(`DISTANCE  ${metres} m`,28,37);
 }
@@ -4464,17 +4709,23 @@ function drawArena(now) {
     const p=id===state.selfId?arena.player:remote;if(!p)continue;
     const deathAge=p.visualEliminatedAt?now-p.visualEliminatedAt:0;
     const twisterDeath=arena.mode==="colorfloor"&&deathAge>0;
-    const deathLifetime=twisterDeath?950:360;
+    const vanishDeath=arena.mode==="vanish"&&deathAge>0;
+    const deathLifetime=twisterDeath?950:(vanishDeath?1350:360);
     if((remote.eliminated||p.visualEliminatedAt)&&deathAge>deathLifetime)continue;
     if(remote.eliminated&&!p.visualEliminatedAt)continue;
     const info=state.room?.players?.find((x)=>x.id===id);
     const jumpRemaining=Math.max(0,(p.jumpingUntil||0)-Date.now());
     const jumpProgress=jumpRemaining?1-jumpRemaining/620:0;
-    const jumpLift=jumpRemaining?Math.sin(jumpProgress*Math.PI)*55:0;
+    const jumpLift=jumpRemaining?Math.sin(jumpProgress*Math.PI)*(arena.mode==="vanish"?74:55):0;
     const vLayer=arena.mode==="vanish"?(p.visualLayer!=null?p.visualLayer:(p.layer||0)):0;
     const layerDrop=arena.mode==="vanish"?(vLayer*VANISH.spacing - (arena.camY||0)):0;
-    const deathDrop=deathAge&&!twisterDeath?Math.min(85,deathAge*.24):0;
+    const deathDrop=deathAge&&!twisterDeath&&!vanishDeath?Math.min(85,deathAge*.24):0;
     const projected=r.project(p.x,p.y,10+jumpLift-layerDrop-deathDrop);
+    if(vanishDeath){
+      const fallT=Math.min(1,deathAge/1150);
+      projected.y+=Math.pow(fallT,1.55)*330;
+      projected.x+=Math.sin(deathAge/85)*10*(1-fallT);
+    }
     if(twisterDeath){
       const bounceAge=Math.min(160,deathAge);
       const launchAge=Math.max(0,deathAge-160);
@@ -4491,6 +4742,13 @@ function drawArena(now) {
       const srx=Math.max(7,22-airborne*.05)*shp.scale, sry=srx*.32;
       // a clear, dark contact shadow so you always know where you are
       ctx.save();
+      if(vanishDeath){
+        const holeT=Math.min(1,deathAge/260);
+        ctx.fillStyle=`rgba(2,6,23,${.35+.55*holeT})`;
+        ctx.beginPath();ctx.ellipse(shp.x,shp.y+3,30*shp.scale*holeT,10*shp.scale*holeT,0,0,Math.PI*2);ctx.fill();
+        ctx.strokeStyle=`rgba(125,211,252,${.8*(1-Math.min(1,deathAge/900))})`;ctx.lineWidth=3;
+        ctx.beginPath();ctx.ellipse(shp.x,shp.y+3,35*shp.scale*holeT,12*shp.scale*holeT,0,0,Math.PI*2);ctx.stroke();
+      }
       ctx.fillStyle=`rgba(0,0,0,${.5*Math.max(.18,1-airborne/170)})`;
       ctx.beginPath();ctx.ellipse(shp.x,shp.y+3,srx,sry,0,0,Math.PI*2);ctx.fill();
       ctx.strokeStyle=`rgba(180,215,255,${.5*Math.max(.15,1-airborne/170)})`;ctx.lineWidth=1.5;
@@ -4535,6 +4793,11 @@ function drawArena(now) {
       ctx.translate(-projected.x,-projected.y);
       ctx.filter="grayscale(1) brightness(0)";
     }
+    if(vanishDeath){
+      const fallT=Math.min(1,deathAge/1150),scale=Math.max(.18,1-fallT*.78);
+      ctx.translate(projected.x,projected.y);ctx.rotate((p.eliminationDirection||1)*fallT*.45);
+      ctx.scale(scale,scale);ctx.translate(-projected.x,-projected.y);ctx.globalAlpha=Math.max(0,1-fallT*.82);
+    }
     PaperCharacter.draw(ctx,{x:projected.x,y:projected.y,size:58*projected.scale,avatar:info?.avatar||remote.avatar,
       state:deathAge?(deathAge<190?"stunned":"eliminated"):(airborne>30?"fall":(jumpRemaining?"jump":(bumped?"stunned":(moving?"run":"idle")))),
       direction:animVx<0?-1:1,time:now});
@@ -4554,6 +4817,15 @@ function drawArena(now) {
       ctx.fillText("⬇ FLOOR "+arena.fallFlash.floor,362,120+t*50);
       ctx.fillStyle="#dbeafe";ctx.fillText("⬇ FLOOR "+arena.fallFlash.floor,360,118+t*50);
       ctx.restore();
+    }
+  }
+  if(arena.mode==="vanish"&&arena.fallOutFlash){
+    const age=now-arena.fallOutFlash.at,life=1350;
+    if(age>life)arena.fallOutFlash=null;
+    else{
+      const t=age/life;ctx.save();ctx.textAlign="center";ctx.globalAlpha=Math.sin(Math.min(1,t*1.4)*Math.PI);
+      ctx.fillStyle="#020617";ctx.font="900 32px sans-serif";ctx.fillText("FELL THROUGH!",363,93+t*20);
+      ctx.fillStyle="#f8fafc";ctx.fillText("FELL THROUGH!",360,90+t*20);ctx.restore();
     }
   }
 }
@@ -4658,21 +4930,21 @@ document.querySelectorAll("[data-race-pedal]").forEach((button)=>{
 // ===================== CHOOSE A DOOR =====================
 const doors={
   state:null,selected:null,revealed:false,player:null,players:new Map(),keys:{},
-  raf:0,lastSent:0,renderer:null,revealAt:0
+  raf:0,lastSent:0,renderer:null,revealAt:0,ownRoute:null,fireY:790,fireReceivedAt:0,done:false
 };
 const DOOR_EFFECTS={safe:["✅","SAFE!"],damage:["💔","OUCH!"],inconvenience:["🌀","NEXT PICK SCRAMBLED!"],eliminate:["💥","ELIMINATED!"]};
 function applyDoorsChoose(payload){
   state.mode="doors";state.deadline=payload.deadline;
-  doors.state=payload;doors.selected=null;doors.revealed=false;
+  doors.state=payload;doors.selected=Number.isInteger(payload.ownChoice)?payload.ownChoice:null;doors.ownRoute=payload.ownRoute||null;doors.revealed=false;doors.done=false;doors.fireY=payload.fireY??1490;doors.fireReceivedAt=performance.now();
   doors.players=new Map();
   updateDoorPlayers(payload.players||[]);
   const me=doors.players.get(state.selfId);
-  doors.player={x:me?.x??360,y:me?.y??390,vx:0,vy:0};
-  $("doors-round").textContent=legPrefix()+`Round ${payload.roundNumber} · Door ${payload.stage} of ${payload.maxStages}`;
-  $("doors-title").textContent="Choose a door!";
-  $("doors-hint").textContent="Choose quickly. Unchosen players get a random door.";
+  doors.player={x:me?.x??360,y:me?.y??1400,vx:0,vy:0};
+  $("doors-round").textContent=legPrefix()+`Round ${payload.roundNumber} · FIRE ESCAPE`;
+  $("doors-title").textContent="RUN FROM THE FIRE!";
+  $("doors-hint").textContent="The wide road splits into three lanes. Pick one — the route stays hidden until it is too late to turn back.";
   $("doors-status").textContent="";
-  startDoorLoop();startTimer(payload.deadline,"doors-timer");showScreen("doors");
+  stopTimer();$("doors-timer").textContent="🔥 RISING";showScreen("doors");startDoorLoop();
 }
 function applyDoorsReveal(payload){
   doors.state=payload;doors.revealed=true;stopTimer();
@@ -4705,12 +4977,13 @@ function startDoorLoop(){
       if(id===state.selfId||!Number.isFinite(p.tx))continue;
       const blend=1-Math.pow(.001,dt);p.x+=(p.tx-p.x)*blend;p.y+=(p.ty-p.y)*blend;
     }
-    if(!doors.revealed&&doors.player&&!Number.isInteger(doors.selected)){
+    if(!doors.done&&doors.player){
       const p=doors.player,ax=((doors.keys.right?1:0)-(doors.keys.left?1:0))*900;
       const ay=((doors.keys.down?1:0)-(doors.keys.up?1:0))*900;
       p.vx=(p.vx+ax*dt)*Math.pow(.025,dt);p.vy=(p.vy+ay*dt)*Math.pow(.025,dt);
       const speed=Math.hypot(p.vx,p.vy),max=230;if(speed>max){p.vx*=max/speed;p.vy*=max/speed;}
-      p.x=Math.max(18,Math.min(702,p.x+p.vx*dt));p.y=Math.max(45,Math.min(410,p.y+p.vy*dt));
+      p.x=Math.max(18,Math.min(702,p.x+p.vx*dt));p.y=Math.max(45,Math.min(1430,p.y+p.vy*dt));
+      if(Number.isFinite(p.serverX)){const correction=Math.min(1,dt*10);p.x+=(p.serverX-p.x)*correction;p.y+=(p.serverY-p.y)*correction;}
       if(now-doors.lastSent>45){doors.lastSent=now;socket.emit("doors:position",{x:p.x,y:p.y});}
     }
     renderDoors(now);
@@ -4720,6 +4993,21 @@ function startDoorLoop(){
 }
 function renderDoors(){
   const now=arguments[0]||performance.now(),canvas=$("doors-canvas");
+  {
+  const ctx=canvas.getContext("2d"),sy=440/760,cameraTop=Math.max(0,Math.min(740,(doors.player?.y??1400)-610)),screenY=(worldY)=>(worldY-cameraTop)*sy;ctx.clearRect(0,0,720,440);
+  const bg=ctx.createLinearGradient(0,0,0,440);bg.addColorStop(0,"#101d35");bg.addColorStop(1,"#3b1b18");ctx.fillStyle=bg;ctx.fillRect(0,0,720,440);
+  ctx.fillStyle="#334155";ctx.fillRect(8,0,704,440);ctx.strokeStyle="rgba(255,255,255,.08)";ctx.lineWidth=2;for(let y=Math.floor(cameraTop/55)*55;y<cameraTop+760;y+=55){ctx.beginPath();ctx.moveTo(8,screenY(y));ctx.lineTo(712,screenY(y));ctx.stroke();}
+  const splitY=screenY(1050);ctx.textAlign="center";
+  ctx.strokeStyle="#111827";ctx.lineWidth=14;for(const x of[8,712]){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,440);ctx.stroke();}
+  for(const x of[240,480]){ctx.beginPath();ctx.moveTo(x,splitY);ctx.lineTo(x,screenY(0));ctx.stroke();ctx.strokeStyle="rgba(251,191,36,.7)";ctx.lineWidth=2;ctx.setLineDash([12,12]);ctx.stroke();ctx.setLineDash([]);ctx.strokeStyle="#111827";ctx.lineWidth=14;}
+  if(splitY>-50&&splitY<470){ctx.fillStyle="rgba(15,23,42,.9)";ctx.fillRect(18,splitY-43,684,38);ctx.fillStyle="#fef3c7";ctx.font="900 18px sans-serif";ctx.fillText("CHOOSE A LANE — NO TURNING BACK",360,splitY-17);for(let i=0;i<3;i++){const x=i*240+120;ctx.fillStyle=doors.selected===i?"#86efac":"#fff";ctx.font="900 30px sans-serif";ctx.fillText("↑",x,splitY+42);}}
+  if(Number.isInteger(doors.selected)){const left=doors.selected*240+16,right=(doors.selected+1)*240-16,mid=(left+right)/2;ctx.fillStyle="rgba(34,197,94,.09)";ctx.fillRect(left,0,right-left,Math.max(0,splitY));ctx.strokeStyle="rgba(187,247,208,.55)";ctx.lineWidth=3;ctx.strokeRect(left,0,right-left,Math.max(0,splitY));
+    if(doors.ownRoute){ctx.fillStyle="#111827";if(doors.ownRoute==="small")ctx.fillRect(left+105,screenY(560),right-left-105,20);if(doors.ownRoute==="big"){ctx.fillRect(left+82,screenY(700),right-left-82,20);ctx.fillRect(left,screenY(380),right-left-82,20);}ctx.strokeStyle="rgba(250,204,21,.85)";ctx.lineWidth=8;ctx.setLineDash([12,10]);ctx.beginPath();ctx.moveTo(mid,screenY(1000));if(doors.ownRoute==="small"){ctx.bezierCurveTo(mid,screenY(720),left+46,screenY(650),left+46,screenY(530));ctx.bezierCurveTo(left+46,screenY(430),mid,screenY(300),mid,screenY(60));}else if(doors.ownRoute==="big"){ctx.bezierCurveTo(left+38,screenY(850),left+38,screenY(700),left+42,screenY(650));ctx.bezierCurveTo(right-38,screenY(570),right-38,screenY(430),right-42,screenY(340));ctx.bezierCurveTo(left+45,screenY(260),left+45,screenY(150),mid,screenY(60));}else ctx.lineTo(mid,screenY(60));ctx.stroke();ctx.setLineDash([]);ctx.fillStyle="#fff";ctx.font="900 14px sans-serif";ctx.fillText(doors.ownRoute==="straight"?"STRAIGHT RUN!":doors.ownRoute==="small"?"SMALL DETOUR!":"BIG DETOUR!",mid,34);}else{ctx.fillStyle="rgba(15,23,42,.86)";ctx.fillRect(left+24,15,right-left-48,38);ctx.fillStyle="#fde68a";ctx.font="900 15px sans-serif";ctx.fillText("ROUTE ???",mid,40);}}
+  const estimatedFire=Math.max(-30,doors.fireY-(now-(doors.fireReceivedAt||now))*.03),fy=screenY(estimatedFire),fire=ctx.createLinearGradient(0,fy-24,0,440);fire.addColorStop(0,"rgba(251,146,60,.25)");fire.addColorStop(.18,"#f97316");fire.addColorStop(1,"#7f1d1d");ctx.fillStyle=fire;ctx.fillRect(0,fy-18,720,440-fy+18);ctx.fillStyle="#fde047";for(let x=0;x<720;x+=24){const h=18+Math.sin(now/90+x)*13;ctx.beginPath();ctx.moveTo(x,fy+8);ctx.lineTo(x+12,fy-h);ctx.lineTo(x+24,fy+8);ctx.fill();}
+  ctx.shadowColor="#ff3d00";ctx.shadowBlur=24;ctx.font="30px system-ui";ctx.textAlign="center";for(let x=12;x<720;x+=34){const bob=Math.sin(now/80+x*.3)*10;ctx.fillText("🔥",x,fy-5+bob);}ctx.shadowBlur=0;ctx.font="15px system-ui";for(let x=22;x<720;x+=48){const rise=((now/5+x*3)%95);ctx.globalAlpha=Math.max(0,1-rise/95);ctx.fillStyle=x%2?"#fde047":"#fb923c";ctx.fillText("✦",x,fy+25-rise);}ctx.globalAlpha=1;if(fy<470){const danger=Math.max(0,Math.min(.42,(500-fy)/500));const vignette=ctx.createRadialGradient(360,210,100,360,210,430);vignette.addColorStop(0,"rgba(127,29,29,0)");vignette.addColorStop(1,`rgba(239,68,68,${danger})`);ctx.fillStyle=vignette;ctx.fillRect(0,0,720,440);}
+  const ordered=[...doors.players.entries()].sort((a,b)=>(a[1].y||0)-(b[1].y||0));for(const[id,remote]of ordered){const p=id===state.selfId?doors.player:remote;if(!p)continue;const deathAge=remote.eliminatedAt?now-remote.eliminatedAt:0;if(remote.eliminated&&deathAge>1200)continue;const info=state.room?.players?.find((x)=>x.id===id),py=screenY(p.y)+(deathAge?deathAge*.09:0),dying=deathAge>0;ctx.save();if(dying){ctx.translate(p.x,py);ctx.rotate(deathAge*.012);ctx.translate(-p.x,-py);ctx.globalAlpha=Math.max(0,1-deathAge/1200);}ctx.fillStyle="rgba(0,0,0,.3)";ctx.beginPath();ctx.ellipse(p.x,py+10,18,7,0,0,Math.PI*2);ctx.fill();PaperCharacter.draw(ctx,{x:p.x,y:py,size:42,avatar:dying?{...(info?.avatar||remote.avatar),color:"#111827"}:info?.avatar||remote.avatar,state:dying?"hurt":Math.hypot(p.vx||0,p.vy||0)>10?"run":"idle",direction:(p.vx||0)<0?-1:1,time:now});ctx.restore();ctx.fillStyle="#fff";ctx.font="bold 11px sans-serif";ctx.textAlign="center";if(!dying)ctx.fillText(id===state.selfId?"You":remote.name,p.x,py-27);}
+  const box=$("doors-players");box.innerHTML="";for(const p of doors.players.values()){const tag=document.createElement("span");tag.className="doors-player"+(p.eliminated?" out":"");tag.innerHTML=`${avatarHtml(p)} ${esc(p.name)} ${p.eliminated?"🔥":"RUN"}`;box.appendChild(tag);}return;
+  }
   if(!doors.renderer||doors.renderer.canvas!==canvas)doors.renderer=new Arena25D(canvas);
   const r=doors.renderer,ctx=r.ctx;r.backdrop("night",now);
   for(let row=0;row<8;row++)for(let col=0;col<8;col++)r.tile(col*90,row*55,90,55,{
@@ -4784,6 +5072,7 @@ function renderResults(payload) {
   if (payload.mode === "redlight") return renderRedLightResults(payload);
   if (payload.mode === "hidebomb") return renderHideBombResults(payload);
   if (payload.mode === "curling") return renderCurlingResults(payload);
+  if (payload.mode === "golf") return renderGolfResults(payload);
   if (payload.mode === "racing") return renderRacingResults(payload);
   if (payload.mode === "painter") return renderPainterResults(payload);
   if (["colorfloor","vanish","bombpass","fire","flappy","runner","pong","doors"].includes(payload.mode)) return renderSurvivalResults(payload);
@@ -4825,6 +5114,13 @@ function renderResults(payload) {
   });
   reactToMyRow(payload.ranking);
   updateResultsHostControls(payload.isFinalRound);
+}
+function renderGolfResults(payload){
+  $("results-caption").textContent="Ricochet Golf";$("correct-answer").textContent="Closest to the hole wins";
+  $("results-head").classList.remove("hidden");$("results-timeline").classList.add("hidden");const list=$("result-list");list.innerHTML="";
+  payload.ranking.forEach((r,i)=>{const li=document.createElement("li");if(r.playerId===state.selfId)li.classList.add("self");
+    li.innerHTML=`<span class="rank">${i===0?"⛳":i+1}</span><div class="r-main"><div class="r-top"><span class="r-name">${avatarHtml(r.avatar)} ${esc(r.name)}</span><span class="r-guess">${r.holed?`HOLED IN ${r.shots}`:`${r.distance} px away · ${r.shots} shots`}</span></div></div><span class="r-points">+${r.pointsAwarded}</span>`;list.appendChild(li);});
+  reactToMyRow(payload.ranking);updateResultsHostControls(payload.isFinalRound);
 }
 function renderPainterResults(payload){
   $("results-caption").textContent="Territory Painter";$("correct-answer").textContent="Largest painted territory wins";
@@ -4933,7 +5229,7 @@ function renderHideBombResults(payload) {
 
 function renderSurvivalResults(payload) {
   cancelAnimationFrame(arena.raf);
-  const labels={colorfloor:"Color Twister",vanish:"Vanishing Grid",bombpass:"Bomb Pass",fire:"Playing with Fire",flappy:"Dragon Rider",runner:"Wild Run",pong:"Polygon Pong",doors:"Choose a Door"};
+  const labels={colorfloor:"Color Twister",vanish:"Vanishing Grid",bombpass:"Bomb Pass",fire:"Blast Brawl",flappy:"Dragon Rider",runner:"Wild Run",pong:"Polygon Pong",doors:"Fire Escape"};
   $("results-caption").textContent=labels[payload.mode]||"Survival";
   const survivors=payload.ranking.filter((r)=>r.survived).length;
   const distanceWinner=["flappy","runner"].includes(payload.mode)?payload.ranking[0]:null;
@@ -5032,8 +5328,7 @@ function updateResultsHostControls(isFinalRound) {
     : "Next round";
   if (state.isHost) {
     $("next-btn").textContent = label;
-    $("next-btn").classList.remove("hidden");$("next-btn").disabled=true;
-    setTimeout(()=>{if(!$("next-btn").classList.contains("hidden"))$("next-btn").disabled=false;},2200);
+    $("next-btn").classList.remove("hidden");$("next-btn").disabled=false;
     $("results-host-note").textContent = "";
   } else {
     $("next-btn").classList.add("hidden");
@@ -5153,10 +5448,13 @@ function countUp(el, target) {
 function updateFinalHostControls() {
   if (state.isHost) {
     $("playagain-btn").classList.remove("hidden");
-    $("final-host-note").textContent = "";
+    $("return-lobby-btn").classList.remove("hidden");
+    $("playagain-btn").disabled=false;$("return-lobby-btn").disabled=false;
+    $("final-host-note").textContent = "Play again with the same settings, or return everyone to the lobby to make changes.";
   } else {
     $("playagain-btn").classList.add("hidden");
-    $("final-host-note").textContent = "Waiting for the host to play again.";
+    $("return-lobby-btn").classList.add("hidden");
+    $("final-host-note").textContent = "Waiting for the host to choose what happens next.";
   }
 }
 

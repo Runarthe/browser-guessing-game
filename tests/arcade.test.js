@@ -13,6 +13,7 @@ function harness(minPlayers = 2) {
   const gm = new GameManager(rm, {
     emitRoom: (code, event, payload) => events.push({ event, payload }),
     minPlayersToStart: minPlayers,
+    roundCountdownMs: 0,
     setTimer: (fn) => { const id = nextTimer++; timers.set(id, fn); return id; },
     clearTimer: (id) => timers.delete(id)
   });
@@ -71,6 +72,23 @@ test("battle wheel sharply lowers the chance of recently played minigames", () =
     {mode:"pong",weight:.35},
     {mode:"pushy",weight:.65}
   ]);
+});
+
+test("refreshing on the wheel preserves the player's turn to spin", () => {
+  const { rm, gm } = harness();
+  const { room } = rm.createRoom("h", "Runar");
+  rm.joinRoom("a", room.code, "Anna");
+  rm.updateSettings(room, "h", { arcade:true, playlist:["bomb","curling"], battleTarget:3 });
+  const token=room.players.h.token;
+  assert.equal(gm.startGame(room,"h").ok,true);
+  assert.equal(room.arcade.spinnerId,"h");
+
+  assert.equal(rm.rejoinRoom("h-refreshed",room.code,token).ok,true);
+  assert.equal(room.arcade.spinnerId,"h-refreshed");
+  const resume=gm.buildResume(room,"h-refreshed");
+  assert.equal(resume.intermission.spinnerId,"h-refreshed");
+  assert.equal(resume.intermission.awaitingSpin,true);
+  assert.equal(gm.spinBattleWheel(room,"h-refreshed").ok,true);
 });
 
 test("battle wheel rotates spinners and ends when a player reaches the win target", () => {

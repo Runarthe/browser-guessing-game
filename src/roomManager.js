@@ -29,7 +29,7 @@ const NAME_MAX = 20;
 const ROOM_TTL_MS = 60 * 60 * 1000; // ~1 hour
 
 // Available game modes and settings bounds.
-const GAME_MODES = ["trivia", "timeline", "curling", "bomb", "map", "platformer", "drawing", "pushy", "redlight", "hidebomb", "colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "runner", "painter", "pong", "doors"];
+const GAME_MODES = ["trivia", "timeline", "curling", "golf", "bomb", "map", "platformer", "drawing", "pushy", "redlight", "hidebomb", "colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "runner", "painter", "pong", "doors"];
 const ALLOWED_ROUNDS = Array.from({length:15},(_,i)=>i+1);
 const ALLOWED_SECONDS = Array.from({length:23},(_,i)=>10+i*5);
 // Hitster (timeline) target: first player to this many cards wins.
@@ -200,16 +200,21 @@ class RoomManager {
       if (Array.isArray(room.turnOrder)) {
         room.turnOrder = room.turnOrder.map((id) => id === oldId ? newSocketId : id);
       }
+      if(Array.isArray(room.golf?.openingOrder))room.golf.openingOrder=room.golf.openingOrder.map((id)=>id===oldId?newSocketId:id);
+      if(room.golf?.openingPlayerId===oldId)room.golf.openingPlayerId=newSocketId;
       for (const bag of [room.votes, room.platformer?.placements, room.platformer?.outcomes,
         room.pushy?.outcomes, room.pushy?.positions, room.drawing?.guessed,
         room.arena?.positions, room.arena?.eliminated, room.arena?.finished,
         room.arena?.upgrades, room.arena?.lives, room.arena?.playerSides,
         room.arena?.painterSpawns, room.arena?.painterTrails, room.doors?.hearts,
-        room.doors?.choices, room.doors?.eliminated, room.doors?.positions]) {
+        room.doors?.choices, room.doors?.revealed, room.doors?.eliminated, room.doors?.finished, room.doors?.positions]) {
         if (bag && Object.prototype.hasOwnProperty.call(bag, oldId)) {
           bag[newSocketId] = bag[oldId];
           delete bag[oldId];
         }
+      }
+      for(const bag of [room.golf?.balls,room.golf?.shots]){
+        if(bag&&Object.prototype.hasOwnProperty.call(bag,oldId)){bag[newSocketId]=bag[oldId];delete bag[oldId];if(bag[newSocketId]?.playerId)bag[newSocketId].playerId=newSocketId;}
       }
       if (room.drawing?.drawerId === oldId) room.drawing.drawerId = newSocketId;
       if (room.redlight?.players?.[oldId]) {
@@ -220,6 +225,26 @@ class RoomManager {
       if (room.hidebomb?.bomberId === oldId) room.hidebomb.bomberId = newSocketId;
       if (room.arena?.holderId === oldId) room.arena.holderId = newSocketId;
       if (room.arena?.previousHolderId === oldId) room.arena.previousHolderId = newSocketId;
+      if (room.arcade?.spinnerId === oldId) room.arcade.spinnerId = newSocketId;
+      for (const bag of [room.arcade?.wins, room.arcade?.scoresAtLegStart]) {
+        if (bag && Object.prototype.hasOwnProperty.call(bag, oldId)) {
+          bag[newSocketId] = bag[oldId];
+          delete bag[oldId];
+        }
+      }
+      if (room.lastIntermission) {
+        if (room.lastIntermission.spinnerId === oldId) room.lastIntermission.spinnerId = newSocketId;
+        if (Array.isArray(room.lastIntermission.lastWinners)) {
+          room.lastIntermission.lastWinners = room.lastIntermission.lastWinners.map((id) => id === oldId ? newSocketId : id);
+        }
+        if (Array.isArray(room.lastIntermission.standings)) for (const row of room.lastIntermission.standings) {
+          if (row.playerId === oldId) row.playerId = newSocketId;
+        }
+        if (room.lastIntermission.wins && Object.prototype.hasOwnProperty.call(room.lastIntermission.wins, oldId)) {
+          room.lastIntermission.wins[newSocketId] = room.lastIntermission.wins[oldId];
+          delete room.lastIntermission.wins[oldId];
+        }
+      }
       if (Array.isArray(room.arena?.finishOrder)) room.arena.finishOrder = room.arena.finishOrder.map((id) => id === oldId ? newSocketId : id);
       if (room.arena?.painterTerritory) for (const key of Object.keys(room.arena.painterTerritory)) {
         if (room.arena.painterTerritory[key] === oldId) room.arena.painterTerritory[key] = newSocketId;
