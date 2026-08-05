@@ -758,6 +758,7 @@ test("choose a door: fire escape locks choices and enforces hidden route geometr
   rm.joinRoom("s4", room.code, "Mina");
   room.settings.mode = "doors";
   gm.startGame(room, "s1");
+  assert.deepEqual(room.doors.botTargets,{},"fire escape initializes bot lane targets before the bot loop runs");
   room.doors.routes=["straight","big","small"];
   room.doors.positions.s1 = { x: 120, y: 1070, updatedAt: 0 };
   gm.doorsPosition(room, "s1", { x: 120, y: 1030 });

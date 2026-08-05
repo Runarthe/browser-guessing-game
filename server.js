@@ -133,14 +133,22 @@ function startTestBots(room) {
           lat: -70 + Math.random() * 140, lng: -170 + Math.random() * 340
         });
         else gameManager.submitGuess(current, bot.id, Math.round(Math.random() * 1000));
-      } else if (mode === "doors" && !current.doors?.eliminated[bot.id] &&
-                 !Number.isInteger(current.doors?.choices[bot.id])) {
+      } else if (mode === "doors" && !current.doors?.eliminated[bot.id]) {
         const d=current.doors,pos=d.positions[bot.id];
+        if(!pos)continue;
         d.botTargets[bot.id] ??= Math.floor(Math.random()*3);
-        const targetX=d.botTargets[bot.id]*240+120;
+        const choice=d.choices[bot.id],route=Number.isInteger(choice)?d.routes[choice]:null;
+        let targetX=d.botTargets[bot.id]*240+120;
+        if(Number.isInteger(choice)){
+          const left=choice*240+16,right=(choice+1)*240-16;
+          targetX=(left+right)/2;
+          if(route==="small"&&pos.y<690&&pos.y>500)targetX=left+45;
+          if(route==="big"&&pos.y>630&&pos.y<820)targetX=left+40;
+          else if(route==="big"&&pos.y>310&&pos.y<=630)targetX=right-40;
+        }
         gameManager.doorsPosition(current,bot.id,{
-          x:pos.x+Math.sign(targetX-pos.x)*Math.min(10,Math.abs(targetX-pos.x)),
-          y:pos.y-9
+          x:pos.x+Math.sign(targetX-pos.x)*Math.min(14,Math.abs(targetX-pos.x)),
+          y:pos.y-8
         });
       } else if (["colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "runner", "painter", "pong"].includes(mode) &&
                  !current.arena?.eliminated[bot.id]) {

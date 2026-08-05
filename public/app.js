@@ -41,7 +41,7 @@ MODE_INFO.flappy = { name: "Dragon Rider", emoji: "🐉", desc: "Guide your tiny
 MODE_INFO.runner = { name: "Wild Run", emoji: "🏃", desc: "Run through an enchanted wilderness, leap over hazards, and go the furthest." };
 MODE_INFO.painter = { name: "Territory Painter", emoji: "🎨", desc: "Every tile you touch becomes your color. Paint over rivals and claim the largest area." };
 MODE_INFO.pong = { name: "Polygon Pong", emoji: "🏓", desc: "Defend your side of the arena. Three misses and you are out." };
-MODE_INFO.doors = { name: "Fire Escape", emoji: "🔥", desc: "Outrun the rising flames, commit to a mystery door, and be the last runner standing." };
+MODE_INFO.doors = { name: "Fire Escape", emoji: "🔥", desc: "Auto-run from the flames, switch into a mystery lane, and survive its hidden detour." };
 MODE_INFO.golf = { name: "Ricochet Golf", emoji: "⛳", desc: "Aim and set power, bank shots around an L-shaped course, collide with rivals, and let the player furthest from the hole shoot next." };
 const AVATAR_COLORS = ["#ff6b6b","#ffcb3d","#4ade80","#60a5fa","#f472b6","#a78bfa","#22d3ee","#fb923c"];
 const AVATAR_KEY = "closest-wins-avatar";
@@ -4942,7 +4942,7 @@ function applyDoorsChoose(payload){
   doors.player={x:me?.x??360,y:me?.y??1400,vx:0,vy:0};
   $("doors-round").textContent=legPrefix()+`Round ${payload.roundNumber} · FIRE ESCAPE`;
   $("doors-title").textContent="RUN FROM THE FIRE!";
-  $("doors-hint").textContent="The wide road splits into three lanes. Pick one — the route stays hidden until it is too late to turn back.";
+  $("doors-hint").textContent="You run automatically. Move left or right, commit to a lane, then dodge its hidden detour!";
   $("doors-status").textContent="";
   stopTimer();$("doors-timer").textContent="🔥 RISING";showScreen("doors");startDoorLoop();
 }
@@ -4978,10 +4978,9 @@ function startDoorLoop(){
       const blend=1-Math.pow(.001,dt);p.x+=(p.tx-p.x)*blend;p.y+=(p.ty-p.y)*blend;
     }
     if(!doors.done&&doors.player){
-      const p=doors.player,ax=((doors.keys.right?1:0)-(doors.keys.left?1:0))*900;
-      const ay=((doors.keys.down?1:0)-(doors.keys.up?1:0))*900;
-      p.vx=(p.vx+ax*dt)*Math.pow(.025,dt);p.vy=(p.vy+ay*dt)*Math.pow(.025,dt);
-      const speed=Math.hypot(p.vx,p.vy),max=230;if(speed>max){p.vx*=max/speed;p.vy*=max/speed;}
+      const p=doors.player,ax=((doors.keys.right?1:0)-(doors.keys.left?1:0))*1150;
+      p.vx=(p.vx+ax*dt)*Math.pow(.018,dt);p.vy+=( -112-p.vy)*Math.min(1,dt*7);
+      p.vx=Math.max(-220,Math.min(220,p.vx));
       p.x=Math.max(18,Math.min(702,p.x+p.vx*dt));p.y=Math.max(45,Math.min(1430,p.y+p.vy*dt));
       if(Number.isFinite(p.serverX)){const correction=Math.min(1,dt*10);p.x+=(p.serverX-p.x)*correction;p.y+=(p.serverY-p.y)*correction;}
       if(now-doors.lastSent>45){doors.lastSent=now;socket.emit("doors:position",{x:p.x,y:p.y});}
@@ -4996,7 +4995,7 @@ function renderDoors(){
   {
   const ctx=canvas.getContext("2d"),sy=440/760,cameraTop=Math.max(0,Math.min(740,(doors.player?.y??1400)-610)),screenY=(worldY)=>(worldY-cameraTop)*sy;ctx.clearRect(0,0,720,440);
   const bg=ctx.createLinearGradient(0,0,0,440);bg.addColorStop(0,"#101d35");bg.addColorStop(1,"#3b1b18");ctx.fillStyle=bg;ctx.fillRect(0,0,720,440);
-  ctx.fillStyle="#334155";ctx.fillRect(8,0,704,440);ctx.strokeStyle="rgba(255,255,255,.08)";ctx.lineWidth=2;for(let y=Math.floor(cameraTop/55)*55;y<cameraTop+760;y+=55){ctx.beginPath();ctx.moveTo(8,screenY(y));ctx.lineTo(712,screenY(y));ctx.stroke();}
+  ctx.fillStyle="#334155";ctx.fillRect(8,0,704,440);ctx.strokeStyle="rgba(255,255,255,.08)";ctx.lineWidth=2;for(let y=Math.floor(cameraTop/55)*55;y<cameraTop+760;y+=55){ctx.beginPath();ctx.moveTo(8,screenY(y));ctx.lineTo(712,screenY(y));ctx.stroke();}ctx.fillStyle="rgba(255,255,255,.12)";for(let y=Math.floor(cameraTop/100)*100;y<cameraTop+760;y+=100){const py=screenY(y);ctx.fillRect(34,py,35,5);ctx.fillRect(651,py,35,5);}
   const splitY=screenY(1050);ctx.textAlign="center";
   ctx.strokeStyle="#111827";ctx.lineWidth=14;for(const x of[8,712]){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,440);ctx.stroke();}
   for(const x of[240,480]){ctx.beginPath();ctx.moveTo(x,splitY);ctx.lineTo(x,screenY(0));ctx.stroke();ctx.strokeStyle="rgba(251,191,36,.7)";ctx.lineWidth=2;ctx.setLineDash([12,12]);ctx.stroke();ctx.setLineDash([]);ctx.strokeStyle="#111827";ctx.lineWidth=14;}
@@ -5240,7 +5239,7 @@ function renderSurvivalResults(payload) {
   const list=$("result-list");list.innerHTML="";
   payload.ranking.forEach((r,i)=>{
     const li=document.createElement("li");if(r.playerId===state.selfId)li.classList.add("self");
-    const detail=["flappy","runner"].includes(payload.mode)?`${r.distance||0} m`:(r.survived?(payload.mode==="doors"?`${r.hearts} hearts left`:payload.mode==="pong"?"last paddle standing":"survived"):
+    const detail=["flappy","runner"].includes(payload.mode)?`${r.distance||0} m`:(r.survived?(payload.mode==="doors"?"escaped the flames":payload.mode==="pong"?"last paddle standing":"survived"):
       (r.reason==="exploded"?"bomb exploded":r.reason==="blast"?"caught in a blast":r.reason==="lava"?"caught by lava":r.reason==="fell"?"fell through":"eliminated"));
     li.innerHTML=`<span class="rank">${r.survived?(i===0?"🏆":"✅"):"💥"}</span>`+
       `<div class="r-main"><div class="r-top"><span class="r-name">${avatarHtml(r.avatar)} ${esc(r.name)}</span>`+

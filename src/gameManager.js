@@ -2633,7 +2633,7 @@ class GameManager {
       positions[p.id]={x:300+(index%4)*40,y:1400,updatedAt:0};
     });
     const routes=["straight","small","big"];for(let i=routes.length-1;i>0;i--){const j=Math.floor(this.random()*(i+1));[routes[i],routes[j]]=[routes[j],routes[i]];}
-    room.doors={positions,choices:{},revealed:{},routes,eliminated:{},finished:{},finishOrder:[],startedAt:now,deadline:now+90000,fireY:1490,endingAt:0};
+    room.doors={positions,choices:{},revealed:{},routes,botTargets:{},eliminated:{},finished:{},finishOrder:[],startedAt:now,deadline:now+90000,fireY:1490,endingAt:0};
     const d=room.doors;
     room.deadline = d.deadline;
     room.state=GAME_STATES.QUESTION;
