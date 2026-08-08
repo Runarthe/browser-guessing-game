@@ -2,18 +2,69 @@
   "name": "mini-mayhem",
   "version": "1.0.0",
   "description": "Mini Mayhem - a browser-based multiplayer minigame party.",
-  "main": "server.js",
+  "main": "electron/main.js",
   "type": "commonjs",
+  "author": "Runar Warberg",
+  "license": "UNLICENSED",
+  "private": true,
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch server.js",
-    "test": "node --test"
+    "test": "node --test \"tests/**/*.test.js\"",
+    "desktop": "electron .",
+    "desktop:dir": "electron-builder --win --dir",
+    "desktop:installer": "electron-builder --win"
   },
   "dependencies": {
     "express": "^4.19.2",
     "socket.io": "^4.7.5"
   },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
   "engines": {
     "node": ">=18"
+  },
+  "build": {
+    "appId": "com.runar.minimayhem",
+    "productName": "Mini Mayhem",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "electron/**/*",
+      "server.js",
+      "src/**/*",
+      "public/**/*",
+      "package.json",
+      "!**/*.map",
+      "!**/_preview_*",
+      "!tests/**",
+      "!_safety-backup-*/**",
+      "!dist/**"
+    ],
+    "asar": true,
+    "asarUnpack": [
+      "public/audio/**"
+    ],
+    "win": {
+      "target": [
+        "dir",
+        "nsis"
+      ],
+      "icon": "build/icon.ico",
+      "artifactName": "MiniMayhem-${version}-${arch}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "shortcutName": "Mini Mayhem",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
+      "installerHeaderIcon": "build/icon.ico",
+      "createDesktopShortcut": true
+    }
   }
 }

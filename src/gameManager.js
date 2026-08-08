@@ -1861,8 +1861,8 @@ class GameManager {
       balls:mode==="pong"?[{id:1,x:360,y:220,vx:175,vy:115}]:[],
       lives:{},playerSides:{},pongSides:mode==="pong"?(players.length===2?4:Math.max(3,players.length)):0,
       nextBallAt:mode==="pong"?now+9000:0,
-      trackId:raceTrack?.id||null,
-      fireShrinkLevel:0,fireNextShrinkAt:mode==="fire"?now+38000:0
+      trackId:raceTrack?.id||null,raceMaxSpeed:mode==="racing"?255:0,
+      fireShrinkLevel:0,fireNextShrinkAt:mode==="fire"?now+38000:0,fireWarnedLevel:0
     };
     if (mode === "fire") {
       const safe = new Set(["1:1","1:2","2:1","11:7","11:6","10:7","11:1","11:2","10:1","1:7","1:6","2:7"]);
@@ -1934,8 +1934,8 @@ class GameManager {
       deadline: a.deadline, startedAt: a.startedAt, serverNow:Date.now(), safeColor: a.safeColor, mapId: a.mapId,
       cycle: a.cycle, holderId: a.holderId, tileLayout: a.tileLayout,
       dangerAt: a.colorDangerAt, scrambleUntil: a.colorScrambleUntil,
-      bombs: a.bombs, blasts: a.blasts, crates: a.crates, powerups:a.powerups,fireShrinkLevel:a.fireShrinkLevel||0,
-      trackId:a.trackId,obstacles:a.obstacles,runnerCoins:a.runnerCoins,runnerPlatforms:a.runnerPlatforms,
+      bombs: a.bombs, blasts: a.blasts, crates: a.crates, powerups:a.powerups,fireShrinkLevel:a.fireShrinkLevel||0,fireNextShrinkAt:a.fireNextShrinkAt||0,
+      trackId:a.trackId,raceMaxSpeed:a.raceMaxSpeed||0,obstacles:a.obstacles,runnerCoins:a.runnerCoins,runnerPlatforms:a.runnerPlatforms,
       runnerTheme:a.runnerTheme,runnerSeed:a.runnerSeed,
       painterCols:a.painterCols,painterRows:a.painterRows,painterTerritory:a.painterTerritory,painterTrails:a.painterTrails,
       painterBuckets:a.painterBuckets,
@@ -2154,11 +2154,14 @@ class GameManager {
     } else if (a.mode === "fire") {
       const exploding=a.bombs.filter((bomb)=>now>=bomb.explodeAt);
       for(const bomb of exploding)this.explodeFireBomb(room,bomb,now);
-      a.blasts=a.blasts.filter((blast)=>now<blast.until);
+      const previousBlastCount=a.blasts.length;a.blasts=a.blasts.filter((blast)=>now<blast.until);
+      if(a.blasts.length!==previousBlastCount)this.emitRoom(room.code,"arena:fire",{bombs:a.bombs,blasts:a.blasts,crates:a.crates,powerups:a.powerups,fireShrinkLevel:a.fireShrinkLevel});
       for(const p of alive()){
         const cell=this.fireCell(a.positions[p.id].x,a.positions[p.id].y),key=`${cell.col}:${cell.row}`;
         if(a.blasts.some((blast)=>blast.cells.includes(key)))this.eliminateArena(room,p.id,"blast");
       }
+      const upcomingLevel=a.fireShrinkLevel+1;
+      if(a.fireShrinkLevel<4&&now>=a.fireNextShrinkAt-4000&&a.fireWarnedLevel<upcomingLevel){a.fireWarnedLevel=upcomingLevel;this.emitRoom(room.code,"arena:fire-warning",{level:upcomingLevel,startsAt:a.fireNextShrinkAt});}
       if(now>=a.fireNextShrinkAt&&a.fireShrinkLevel<4){
         a.fireShrinkLevel++;a.fireNextShrinkAt=now+5500;
         for(const p of alive()){
@@ -2471,12 +2474,12 @@ class GameManager {
             const targetId = hitterId === socketId ? otherId : socketId;
             const rvx=(pos.vx||0)-(other.vx||0),rvy=(pos.vy||0)-(other.vy||0);
             const closing=Math.max(0,-(rvx*nx+rvy*ny));
-            const bounce=Math.min(190,Math.max(38,closing*.82+overlap*5));
+            const bounce=Math.min(250,Math.max(55,closing*1.08+overlap*7));
             const posImpulse={x:nx*bounce,y:ny*bounce};
             const otherImpulse={x:-nx*bounce,y:-ny*bounce};
             this.emitRoom(room.code, "arena:bump", {
               hitterId, targetId,
-              intensity: Math.max(.25, Math.min(1, bounce / 170)),
+              intensity: Math.max(.3, Math.min(1, bounce / 220)),
               nx: hitterId===socketId?-nx:nx, ny:hitterId===socketId?-ny:ny,
               racing:a.mode==="racing",
               impulses:a.mode==="racing"?{[socketId]:posImpulse,[otherId]:otherImpulse}:undefined
@@ -2630,10 +2633,11 @@ class GameManager {
 
   beginDoorsRound(room) {
     const now=Date.now(),positions={};this.roomManager.connectedPlayers(room).forEach((p,index)=>{
-      positions[p.id]={x:300+(index%4)*40,y:1400,updatedAt:0};
+      positions[p.id]={x:330+(index%4)*20,y:1400,updatedAt:0};
     });
-    const routes=["straight","small","big"];for(let i=routes.length-1;i>0;i--){const j=Math.floor(this.random()*(i+1));[routes[i],routes[j]]=[routes[j],routes[i]];}
-    room.doors={positions,choices:{},revealed:{},routes,botTargets:{},eliminated:{},finished:{},finishOrder:[],startedAt:now,deadline:now+90000,fireY:1490,endingAt:0};
+    const routeSets=[];for(let stage=0;stage<32;stage++){const routes=["straight","small","big"];for(let i=routes.length-1;i>0;i--){const j=Math.floor(this.random()*(i+1));[routes[i],routes[j]]=[routes[j],routes[i]];}routeSets.push(routes);}
+    room.doors={positions,choices:{},revealed:{},stageByPlayer:{},routeSets,routes:routeSets[0],botTargets:{},eliminated:{},finished:{},finishOrder:[],startedAt:now,deadline:now+90000,fireY:1700,fireSpeed:122,runSpeed:182,endingAt:0};
+    this.roomManager.connectedPlayers(room).forEach((p)=>{room.doors.stageByPlayer[p.id]=0;});
     const d=room.doors;
     room.deadline = d.deadline;
     room.state=GAME_STATES.QUESTION;
@@ -2643,7 +2647,7 @@ class GameManager {
 
   armDoorsTick(room){this.disarmTimer(room);this.timers.set(room.code,this.setTimer(()=>{const current=this.roomManager.getRoom(room.code);if(current?.state===GAME_STATES.QUESTION&&this.mode(current)==="doors")this.tickDoors(current);},55));}
   tickDoors(room){
-    const d=room.doors,now=Date.now();d.fireY=1490-(now-d.startedAt)*.03;
+    const d=room.doors,now=Date.now(),seconds=(now-d.startedAt)/1000;d.runSpeed=182+Math.min(68,seconds*1.55);d.fireSpeed=122+seconds*2;d.fireY=1700-122*seconds-seconds*seconds;
     const runners=this.roomManager.connectedPlayers(room).filter((p)=>!d.eliminated[p.id]&&!d.finished[p.id]);
     const caught=runners.filter((p)=>d.positions[p.id]?.y>=d.fireY).sort((a,b)=>d.positions[b.id].y-d.positions[a.id].y);
     for(const p of caught){const remaining=this.roomManager.connectedPlayers(room).filter((q)=>!d.eliminated[q.id]&&!d.finished[q.id]).length;if(remaining<=1)break;this.eliminateDoorRunner(room,p.id,"fire");}
@@ -2657,11 +2661,11 @@ class GameManager {
   doorsPublic(room, reveal = false) {
     const d = room.doors;
     return {
-      mode: "doors", deadline: d.deadline, startedAt:d.startedAt, fireY:d.fireY,
+      mode: "doors", deadline: d.deadline, startedAt:d.startedAt, fireY:d.fireY,fireSpeed:d.fireSpeed,runSpeed:d.runSpeed,
       roundNumber: room.roundIndex + 1, totalRounds: room.totalRounds,
       players: this.roomManager.connectedPlayers(room).map((p) => ({
         playerId: p.id, name: p.name, avatar: p.avatar,
-        eliminated: !!d.eliminated[p.id], finished:!!d.finished[p.id], choice:d.choices[p.id],
+        eliminated: !!d.eliminated[p.id], finished:!!d.finished[p.id], choice:d.choices[p.id],stage:d.stageByPlayer[p.id]||0,
         x: d.positions[p.id]?.x, y: d.positions[p.id]?.y
       }))
     };
@@ -2675,8 +2679,9 @@ class GameManager {
     const index = Number(rawIndex);
     if (!Number.isInteger(index) || index < 0 || index > 2) return { ok: false, error: "Choose a valid door." };
     if(Number.isInteger(room.doors.choices[socketId]))return{ok:true};
+    const stage=room.doors.stageByPlayer[socketId]||0;
     room.doors.choices[socketId] = index;
-    this.emitSocket(socketId, "doors:selected", { doorIndex: index });
+    this.emitSocket(socketId, "doors:selected", { doorIndex: index,stage });
     return { ok: true };
   }
 
@@ -2691,18 +2696,20 @@ class GameManager {
     const x = Number(raw.x), y = Number(raw.y);
     if (![x, y].every(Number.isFinite)) return { ok: false, error: "Invalid position." };
     const elapsed=pos.updatedAt?Math.max(.035,(now-pos.updatedAt)/1000):.12,maxStep=250*elapsed+12;
-    let nx=pos.x+Math.max(-maxStep,Math.min(maxStep,x-pos.x)),ny=pos.y+Math.max(-maxStep,Math.min(maxStep,y-pos.y));
-    nx=Math.max(18,Math.min(702,nx));ny=Math.max(45,Math.min(1430,ny));
-    if(!Number.isInteger(d.choices[socketId])&&ny<=1050)this.chooseDoor(room,socketId,Math.max(0,Math.min(2,Math.floor(nx/240))));
+    let nx=pos.x+Math.max(-maxStep,Math.min(maxStep,x-pos.x)),ny=pos.y-(d.runSpeed||182)*elapsed;
+    nx=Math.max(113,Math.min(607,nx));ny=Math.min(1430,ny);
+    const stage=d.stageByPlayer[socketId]||0,split=1050-stage*1050;
+    if(!Number.isInteger(d.choices[socketId])&&ny<=split)this.chooseDoor(room,socketId,Math.max(0,Math.min(2,Math.floor((nx-105)/170))));
     const choice=d.choices[socketId];
     if(Number.isInteger(choice)){
-      const left=choice*240+16,right=(choice+1)*240-16;nx=Math.max(left,Math.min(right,nx));const route=d.routes[choice];
-      if(!d.revealed[socketId]&&ny<=820){d.revealed[socketId]=true;this.emitSocket(socketId,"doors:route-revealed",{route});}
-      if(route==="small"&&pos.y>=560&&ny<560&&nx>left+105)ny=560;
+      const left=113+choice*170,right=267+choice*170;nx=Math.max(left,Math.min(right,nx));const route=(d.routeSets[stage]||d.routeSets[d.routeSets.length-1])[choice];
+      if(!d.revealed[socketId]&&ny<=split-180){d.revealed[socketId]=true;this.emitSocket(socketId,"doors:route-revealed",{route,stage});}
+      if(route==="small"&&pos.y>=split-490&&ny<split-490&&nx>left+72)ny=split-490;
       if(route==="big"){
-        if(pos.y>=700&&ny<700&&nx>left+82)ny=700;
-        if(pos.y>=380&&ny<380&&nx<right-82)ny=380;
+        if(pos.y>=split-350&&ny<split-350&&nx>left+56)ny=split-350;
+        if(pos.y>=split-670&&ny<split-670&&nx<right-56)ny=split-670;
       }
+      if(ny<=split-780){d.stageByPlayer[socketId]=stage+1;delete d.choices[socketId];delete d.revealed[socketId];delete d.botTargets[socketId];this.emitSocket(socketId,"doors:next-choice",{stage:stage+1});}
     }
     pos.x=nx;pos.y=ny;
     pos.updatedAt = now;
@@ -3633,8 +3640,8 @@ class GameManager {
         return { ...base, arena: this.arenaPublic(room) };
       }
       if (mode === "doors" && room.doors) {
-        const payload=this.doorsPublic(room,false),choice=room.doors.choices[socketId];
-        return { ...base, doors:{...payload,ownChoice:choice,ownRoute:room.doors.revealed[socketId]?room.doors.routes[choice]:null} };
+        const payload=this.doorsPublic(room,false),choice=room.doors.choices[socketId],stage=room.doors.stageByPlayer[socketId]||0;
+        return { ...base, doors:{...payload,ownChoice:choice,ownStage:stage,ownRoute:room.doors.revealed[socketId]?(room.doors.routeSets[stage]||room.doors.routeSets.at(-1))[choice]:null} };
       }
       if (mode === "timeline" && room.hitster?.teamVote) {
         return { ...base, turn: room.currentCard ? this.teamRoundPayload(room) : { mode: "timeline", teamVote: true } };

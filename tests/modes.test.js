@@ -544,7 +544,7 @@ test("playing with fire: body collision prevents diagonal clipping and powerups 
 });
 
 test("playing with fire: borders stay sealed, bombs block, and active flame remains lethal", () => {
-  const { rm, gm } = harness();
+  const { rm, gm, last } = harness();
   const { room } = rm.createRoom("s1", "Runar");
   rm.joinRoom("s2", room.code, "Anna");
   room.settings.mode = "fire"; gm.startGame(room, "s1");
@@ -561,6 +561,10 @@ test("playing with fire: borders stay sealed, bombs block, and active flame rema
   room.arena.blasts=[{cells:["4:3"],until:Date.now()+500}];
   gm.tickArena(room);
   assert.equal(room.arena.eliminated.s2.reason,"blast");
+  room.arena.blasts=[{cells:["5:3"],until:Date.now()-1}];gm.tickArena(room);
+  assert.deepEqual(last("arena:fire").payload.blasts,[],"expired blast visuals are explicitly cleared for every client");
+  room.arena.fireNextShrinkAt=Date.now()+3000;room.arena.fireWarnedLevel=0;gm.tickArena(room);
+  assert.equal(last("arena:fire-warning").payload.level,1,"players receive advance notice before the arena shrinks");
 });
 
 test("pocket racers: sequential checkpoints complete three laps", () => {
@@ -571,6 +575,7 @@ test("pocket racers: sequential checkpoints complete three laps", () => {
   gm.random=()=>0; // keep this physics test on its explicit square-track coordinates
   gm.startGame(room, "s1");
   assert.equal(last("arena:start").payload.mode, "racing");
+  assert.equal(last("arena:start").payload.raceMaxSpeed,255,"every racer receives the same base maximum speed");
   assert.ok(Math.hypot(
     room.arena.positions.s1.x-room.arena.positions.s2.x,
     room.arena.positions.s1.y-room.arena.positions.s2.y
@@ -599,6 +604,7 @@ test("pocket racers: sequential checkpoints complete three laps", () => {
   assert.equal(impact.racing,true,"car contact should broadcast a competitive impact");
   assert.ok(impact.impulses.s1&&impact.impulses.s2,"both cars receive a directional bounce impulse");
   assert.ok(impact.impulses.s1.x*impact.impulses.s2.x<=0,"collision impulses push the cars apart");
+  assert.ok(Math.hypot(impact.impulses.s1.x,impact.impulses.s1.y)>=55,"race collisions have a noticeable minimum bounce");
   Object.assign(room.arena.positions.s1,{x:700,y:220,crashCooldownUntil:0});
   assert.equal(gm.arenaCrash(room,"s1").ok,true);
   assert.equal(room.arena.positions.s1.x,640,"a fallen car should return to the nearest centerline");
@@ -759,13 +765,16 @@ test("choose a door: fire escape locks choices and enforces hidden route geometr
   room.settings.mode = "doors";
   gm.startGame(room, "s1");
   assert.deepEqual(room.doors.botTargets,{},"fire escape initializes bot lane targets before the bot loop runs");
-  room.doors.routes=["straight","big","small"];
+  const sharedUpdate=Date.now()-100;Object.assign(room.doors.positions.s1,{y:1400,updatedAt:sharedUpdate});Object.assign(room.doors.positions.s2,{y:1400,updatedAt:sharedUpdate});
+  gm.doorsPosition(room,"s1",{x:120,y:0});gm.doorsPosition(room,"s2",{x:360,y:1399});assert.ok(Math.abs(room.doors.positions.s1.y-room.doors.positions.s2.y)<1,"all runners advance at the same server-authoritative speed regardless of submitted y");
+  room.doors.routes=["straight","big","small"];room.doors.routeSets[0]=room.doors.routes;
   room.doors.positions.s1 = { x: 120, y: 1070, updatedAt: 0 };
   gm.doorsPosition(room, "s1", { x: 120, y: 1030 });
   assert.equal(room.doors.choices.s1, 0, "crossing the lane split locks that lane");
   gm.chooseDoor(room,"s1",2);assert.equal(room.doors.choices.s1,0,"a locked choice cannot be regretted");
   gm.chooseDoor(room,"s2",1);Object.assign(room.doors.positions.s2,{x:360,y:720,updatedAt:0});gm.doorsPosition(room,"s2",{x:360,y:680});assert.equal(room.doors.positions.s2.y,700,"the big route forces its first detour");
   gm.chooseDoor(room,"s3",2);Object.assign(room.doors.positions.s3,{x:630,y:580,updatedAt:0});gm.doorsPosition(room,"s3",{x:630,y:540});assert.equal(room.doors.positions.s3.y,560,"the small route forces its single detour");
+  Object.assign(room.doors.positions.s1,{x:120,y:280,updatedAt:0});gm.doorsPosition(room,"s1",{x:120,y:260});assert.equal(room.doors.stageByPlayer.s1,1,"finishing one route opens another irreversible lane choice");assert.equal(room.doors.choices.s1,undefined,"the next junction requires a fresh choice");
   gm.eliminateDoorRunner(room,"s1","fire");gm.eliminateDoorRunner(room,"s2","fire");gm.eliminateDoorRunner(room,"s3","fire");room.doors.endingAt=Date.now()-1;gm.tickDoors(room);
   assert.equal(last("round:results").payload.ranking[0].playerId,"s4","the round ends when only one runner remains");
 });

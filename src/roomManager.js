@@ -207,7 +207,8 @@ class RoomManager {
         room.arena?.positions, room.arena?.eliminated, room.arena?.finished,
         room.arena?.upgrades, room.arena?.lives, room.arena?.playerSides,
         room.arena?.painterSpawns, room.arena?.painterTrails, room.doors?.hearts,
-        room.doors?.choices, room.doors?.revealed, room.doors?.eliminated, room.doors?.finished, room.doors?.positions]) {
+        room.doors?.choices, room.doors?.revealed, room.doors?.stageByPlayer, room.doors?.botTargets,
+        room.doors?.eliminated, room.doors?.finished, room.doors?.positions]) {
         if (bag && Object.prototype.hasOwnProperty.call(bag, oldId)) {
           bag[newSocketId] = bag[oldId];
           delete bag[oldId];

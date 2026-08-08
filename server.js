@@ -1,6 +1,7 @@
 "use strict";
 
 const path = require("path");
+const os = require("os");
 const http = require("http");
 const express = require("express");
 const { Server } = require("socket.io");
@@ -23,6 +24,14 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
+// Client assets. In the packaged build these live inside `app.asar`, except
+// `public/audio` which is unpacked (see `asarUnpack`) so the browser's range
+// requests for music stream off real files. Electron's fs shim transparently
+// redirects the unpacked paths, so a single static root serves both.
+//
+// Note `src/gameManager.js` requires `../public/vanishMaps.js` — server and
+// client share that module, which is why `public` as a whole stays in the asar.
+//
 // This project is iterated on locally. Disable stale asset caching so every
 // reload receives the renderer that matches the currently running server.
 app.use(express.static(path.join(__dirname, "public"), {
@@ -137,18 +146,19 @@ function startTestBots(room) {
         const d=current.doors,pos=d.positions[bot.id];
         if(!pos)continue;
         d.botTargets[bot.id] ??= Math.floor(Math.random()*3);
-        const choice=d.choices[bot.id],route=Number.isInteger(choice)?d.routes[choice]:null;
-        let targetX=d.botTargets[bot.id]*240+120;
+        const choice=d.choices[bot.id],stage=d.stageByPlayer[bot.id]||0,split=1050-stage*1050,route=Number.isInteger(choice)?(d.routeSets[stage]||d.routeSets.at(-1))[choice]:null;
+        let targetX=190+d.botTargets[bot.id]*170;
         if(Number.isInteger(choice)){
-          const left=choice*240+16,right=(choice+1)*240-16;
+          const left=113+choice*170,right=267+choice*170;
           targetX=(left+right)/2;
-          if(route==="small"&&pos.y<690&&pos.y>500)targetX=left+45;
-          if(route==="big"&&pos.y>630&&pos.y<820)targetX=left+40;
-          else if(route==="big"&&pos.y>310&&pos.y<=630)targetX=right-40;
+          if(route==="small"&&pos.y<split-360&&pos.y>split-550)targetX=left+30;
+          if(route==="big"&&pos.y<split-230&&pos.y>split-410)targetX=left+28;
+          else if(route==="big"&&pos.y<=split-410&&pos.y>split-730)targetX=right-28;
         }
+        const runSpeed=d.runSpeed||182;
         gameManager.doorsPosition(current,bot.id,{
-          x:pos.x+Math.sign(targetX-pos.x)*Math.min(14,Math.abs(targetX-pos.x)),
-          y:pos.y-8
+          x:pos.x+Math.sign(targetX-pos.x)*Math.min(34,Math.abs(targetX-pos.x)),
+          y:pos.y-runSpeed*.1
         });
       } else if (["colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "runner", "painter", "pong"].includes(mode) &&
                  !current.arena?.eliminated[bot.id]) {
@@ -186,12 +196,15 @@ function startTestBots(room) {
           if(mode==="racing"){
             const tracks={
               square:[[590,90],[640,140],[640,320],[590,370],[130,370],[80,320],[80,140],[130,90]],
-              swing:[[310,70],[520,105],[630,190],[540,260],[630,350],[390,375],[250,310],[90,350],[120,220],[260,205],[110,100]]
+              swing:[[310,70],[520,105],[630,190],[540,260],[630,350],[390,375],[250,310],[90,350],[120,220],[260,205],[110,100]],
+              harbor:[[315,72],[565,96],[642,165],[570,225],[640,310],[535,378],[270,365],[82,305],[148,220],[78,150],[105,105]],
+              oval:[[465,78],[555,105],[620,150],[650,220],[620,290],[555,335],[465,362],[360,370],[255,362],[165,335],[100,290],[70,220],[100,150],[165,105],[255,78],[360,70]]
             };
             const waypoints=tracks[current.arena.trackId]||tracks.square;
             current.arena.botRace ||= {};const ri=current.arena.botRace[bot.id]||0,target=waypoints[ri];
             const dx=target[0]-pos.x,dy=target[1]-pos.y,d=Math.max(1,Math.hypot(dx,dy));
-            gameManager.arenaPosition(current,bot.id,{x:pos.x+dx/d*18,y:pos.y+dy/d*18,angle:Math.atan2(dy,dx)});
+            const step=(current.arena.raceMaxSpeed||255)*.1;
+            gameManager.arenaPosition(current,bot.id,{x:pos.x+dx/d*step,y:pos.y+dy/d*step,angle:Math.atan2(dy,dx)});
             if(d<35)current.arena.botRace[bot.id]=(ri+1)%waypoints.length;
             continue;
           }
@@ -661,9 +674,102 @@ setInterval(() => {
   }
 }, 5 * 60 * 1000).unref();
 
-server.listen(PORT, () => {
-  console.log(`Mini Mayhem running at http://localhost:${PORT}`);
-  console.log(`Minimum players to start: ${MIN_PLAYERS} · Round length: ${ROUND_SECONDS}s`);
-});
+// Picking "the" local address is guesswork on a machine with VPNs and
+// hypervisors, so rank candidates instead of taking the first one. Getting this
+// wrong is silent and confusing: the app happily shows an address that a guest's
+// phone simply cannot route to.
+const VIRTUAL_IF = /tailscale|zerotier|vmware|virtualbox|vbox|docker|hyper-?v|vethernet|wsl|loopback|bluetooth|utun|tun\d|tap\d|nordlynx|wireguard|openvpn|proton|radmin/i;
+const PHYSICAL_IF = /wi-?fi|wlan|wireless|ethernet|^lan\b|^en\d|^eth\d/i;
 
-module.exports = { app, server, io, roomManager, gameManager };
+function rankAddress(name, address) {
+  let score = 0;
+  if (/^192\.168\./.test(address)) score += 100;                       // home wifi
+  else if (/^10\./.test(address)) score += 90;                         // office / larger LAN
+  else if (/^172\.(1[6-9]|2\d|3[01])\./.test(address)) score += 80;    // private range
+  else if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(address)) score -= 60; // CGNAT (Tailscale)
+  else if (/^169\.254\./.test(address)) score -= 120;                  // link-local, never useful
+  if (PHYSICAL_IF.test(name)) score += 25;
+  if (VIRTUAL_IF.test(name)) score -= 80;
+  return score;
+}
+
+/** All reachable IPv4 addresses, best guess for "same wifi" first. */
+function lanCandidates() {
+  const found = [];
+  for (const [name, list] of Object.entries(os.networkInterfaces())) {
+    for (const net of list || []) {
+      if (net.family !== "IPv4" || net.internal) continue;
+      found.push({ name, address: net.address, score: rankAddress(name, net.address) });
+    }
+  }
+  return found.sort((a, b) => b.score - a.score || a.address.localeCompare(b.address));
+}
+
+/** Single best address for phones on the same wifi, or null if there is none. */
+function lanAddress() {
+  const best = lanCandidates()[0];
+  return best ? best.address : null;
+}
+
+/**
+ * Begin listening and resolve with the details a host UI needs.
+ * Pass `port: 0` to let the OS assign a free port — the desktop build does this
+ * because 3000 is frequently already taken on a player's machine.
+ */
+function start({ port = PORT, host } = {}) {
+  return new Promise((resolve, reject) => {
+    const onError = (err) => reject(err);
+    server.once("error", onError);
+    // Deliberately omit the host when not given. Node then binds dual-stack
+    // (IPv6 `::` with IPv4 mapped in), which is what plain `listen(PORT)` did.
+    // Binding "0.0.0.0" is IPv4-only, and on Windows `localhost` resolves to
+    // ::1 first — so an IPv4-only bind makes http://localhost unreachable.
+    // Dual-stack still accepts LAN connections, so phones are unaffected.
+    const args = host ? [port, host] : [port];
+    server.listen(...args, () => {
+      server.removeListener("error", onError);
+      const actualPort = server.address().port;
+      const candidates = lanCandidates();
+      resolve({
+        port: actualPort,
+        localUrl: `http://localhost:${actualPort}`,
+        lanUrl: candidates[0] ? `http://${candidates[0].address}:${actualPort}` : null,
+        // Every candidate, best first — the host UI offers these as fallbacks
+        // when the top guess turns out to be a VPN or virtual adapter.
+        lanUrls: candidates.map((c) => ({
+          url: `http://${c.address}:${actualPort}`, name: c.name, address: c.address
+        })),
+        minPlayers: MIN_PLAYERS,
+        roundSeconds: ROUND_SECONDS
+      });
+    });
+  });
+}
+
+/** Close the socket layer and HTTP server (used on desktop app quit). */
+function stop() {
+  return new Promise((resolve) => {
+    io.close(() => server.close(() => resolve()));
+  });
+}
+
+// Only self-start when run directly (`npm start`). When the desktop build
+// requires this file, it calls start() itself so it can choose the port.
+if (require.main === module) {
+  start().then((info) => {
+    console.log(`Mini Mayhem running at ${info.localUrl}`);
+    if (info.lanUrl) console.log(`On this network: ${info.lanUrl}`);
+    for (const alt of info.lanUrls.slice(1)) {
+      console.log(`     (or, via ${alt.name}: ${alt.url})`);
+    }
+    console.log(`Minimum players to start: ${info.minPlayers} · Round length: ${info.roundSeconds}s`);
+  }).catch((err) => {
+    console.error(`Failed to start on port ${PORT}:`, err.message);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  app, server, io, roomManager, gameManager,
+  start, stop, lanAddress, lanCandidates, rankAddress
+};
