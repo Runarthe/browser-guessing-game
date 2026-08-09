@@ -1563,13 +1563,26 @@ function renderModeCatalog(containerId, selected, onPick, multi = false) {
     `<button class="mode-tab" data-tab="wip">Work in progress <span>${wip.length}</span></button></div>`+
     `<p class="mode-tab-note">Friend-test ready minigames.</p><div class="mode-panel" data-panel="ready"></div>`+
     `<div class="mode-panel hidden" data-panel="wip"></div>`;
+  // Modes that suit the current group float to the top and carry a hint.
+  // Deliberately never disabled — the host keeps the final say; this only
+  // makes the good choice the easy one.
+  const headcount = (state.room?.players || []).filter((p) => p.connected !== false).length || 0;
+  const MI = window.ModeInfo;
+
   const fill = (panelName, modes) => {
     const panel = c.querySelector(`[data-panel="${panelName}"]`);
-    modes.forEach((m) => {
+    const ordered = (MI && headcount >= 2 && panelName === "ready")
+      ? MI.sortByFit(modes, headcount) : modes;
+    ordered.forEach((m) => {
       const info = MODE_INFO[m] || { name: m, emoji: "🎮" }, button = document.createElement("button");
-      button.className = "mode-card" + (chosen.has(m) ? " selected" : "") + (panelName === "wip" ? " wip" : "");
+      const fit = (MI && headcount >= 2) ? MI.fitFor(m, headcount) : null;
+      const hint = (MI && headcount >= 2) ? MI.hintFor(m, headcount) : "";
+      button.className = "mode-card" + (chosen.has(m) ? " selected" : "") + (panelName === "wip" ? " wip" : "") +
+        (fit === "great" ? " fit-great" : "") + (fit === "too-few" ? " fit-poor" : "");
       button.disabled = !state.isHost||!!info.concept;
-      button.innerHTML = `<span class="mode-card-icon">${info.emoji}</span><span><b>${esc(info.name)}</b><small>${esc(info.desc || "")}</small></span>`+
+      const badge = fit === "great" ? `<em class="fit-badge">GREAT WITH ${headcount}</em>`
+        : (hint ? `<em class="fit-hint">${esc(hint)}</em>` : "");
+      button.innerHTML = `<span class="mode-card-icon">${info.emoji}</span><span><b>${esc(info.name)}</b>${badge}<small>${esc(info.desc || "")}</small></span>`+
         (info.concept?`<strong>PLANNED</strong>`:(multi && chosen.has(m) ? `<strong>✓</strong>` : ""));
       if(!info.concept)button.addEventListener("click", () => onPick(m));panel.appendChild(button);
     });
@@ -1609,9 +1622,25 @@ function renderSettings(room) {
       if (next.length === 0) next = [m];
       socket.emit("settings:update", { playlist: next, arcade: true });
     }, true);
+    const headcount = (room.players || []).filter((p) => p.connected !== false).length || 0;
     $("playlist-preview").textContent = playlist.length
       ? `${playlist.length} minigames are on the random wheel.`
       : "Pick at least one minigame.";
+
+    // One tap to a playlist that suits the room. The wheel is only as good as
+    // what the host put on it, so this is where mode-fit actually pays off.
+    const recBtn = $("playlist-recommend");
+    if (recBtn) {
+      const canRecommend = state.isHost && window.ModeInfo && headcount >= 2;
+      recBtn.classList.toggle("hidden", !canRecommend);
+      if (canRecommend) {
+        recBtn.textContent = `✨ Recommend for ${headcount} players`;
+        recBtn.onclick = () => {
+          const next = window.ModeInfo.recommendedPlaylist(headcount);
+          if (next.length) socket.emit("settings:update", { playlist: next, arcade: true });
+        };
+      }
+    }
   }
 
   $("set-battle-target-wrap").classList.toggle("hidden", !arcade);

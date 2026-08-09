@@ -63,7 +63,7 @@ function defaultSettings() {
     // the configured number of minigame wins takes the match.
     arcade: false,
     battleTarget: 5,
-    playlist: ["curling", "platformer", "pushy", "hidebomb", "colorfloor", "vanish", "fire", "racing", "flappy", "runner", "painter", "pong"],
+    playlist: ["map", "timeline", "trivia", "fire", "pong", "bomb", "curling", "vanish", "runner", "platformer"],
     // null = all trivia categories enabled. Otherwise an array of category names.
     categories: null
   };

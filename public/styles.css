@@ -932,3 +932,13 @@ body {
 /* ---- Logo subtitle ------------------------------------------------------- */
 .logo-sub{margin:-6px 0 2px;text-align:center;font-size:12px;font-weight:800;
   letter-spacing:.34em;text-indent:.34em;opacity:.62}
+
+/* ---- Mode fit hints ------------------------------------------------------ */
+.fit-badge{display:inline-block;margin-left:8px;padding:1px 7px;border-radius:999px;font-style:normal;
+  font-size:10px;font-weight:800;letter-spacing:.06em;background:rgba(74,222,128,.18);
+  border:1px solid rgba(74,222,128,.45);color:#86efac}
+.fit-hint{display:inline-block;margin-left:8px;font-style:normal;font-size:10px;font-weight:700;
+  letter-spacing:.04em;opacity:.6}
+.mode-card.fit-great{border-color:rgba(74,222,128,.4)}
+.mode-card.fit-poor{opacity:.62}
+#playlist-recommend{margin-top:8px;align-self:flex-start}
