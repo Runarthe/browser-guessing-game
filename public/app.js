@@ -2012,15 +2012,24 @@ function renderOtherTimelines(timelines, activeId) {
 }
 
 function updateCurling(payload) {
-  const shotJustStarted=!!payload.trajectory?.length&&!curlingVisual.anim;
+  // Ignore a trajectory we are already animating. The server only sends one
+  // during live playback now, but a rejoin or a duplicated turn update can
+  // still deliver the same shot twice, and restarting would replay its
+  // collision and stone-off sounds out of step with what is on screen.
+  const shotId=payload.trajectoryId||0;
+  const alreadyPlaying=!!curlingVisual.anim&&curlingVisual.animId===shotId&&shotId!==0;
+  const isNewShot=!!payload.trajectory?.length&&!alreadyPlaying;
+
+  const shotJustStarted=isNewShot&&!curlingVisual.anim;
   if(payload.stones)curlingVisual.stones=payload.stones;
-  if(payload.trajectory?.length){
+  if(isNewShot){
     let peakStep=.001;
     for(let i=1;i<payload.trajectory.length;i++)for(const stone of payload.trajectory[i]){
       const prev=payload.trajectory[i-1].find((p)=>p.stoneId===stone.stoneId);
       if(prev&&!stone.off&&!prev.off)peakStep=Math.max(peakStep,Math.hypot(stone.x-prev.x,stone.y-prev.y));
     }
     curlingVisual.anim={frames:payload.trajectory,peakStep,collisionFrames:payload.collisionFrames||[],playedCollisions:new Set(),offStoneIds:new Set((payload.trajectory[0]||[]).filter((s)=>s.off).map((s)=>s.stoneId)),started:performance.now()};
+    curlingVisual.animId=shotId;
   }
   if(shotJustStarted)sfx.startCurlingSlide();
   if (payload.order) renderTurnOrder($("curling-order"), payload.order);
@@ -2159,7 +2168,7 @@ function drawCurlingRink(now=performance.now()){
     if(!animating&&age<curlingVisual.anim.frames.length*frameMs+settleHold)animating=true;
     if(!animating){
       sfx.stopCurlingSlide();
-      curlingVisual.anim=null;
+      curlingVisual.anim=null;curlingVisual.animId=0;
       const results=curlingVisual.pendingResults;curlingVisual.pendingResults=null;
       const pending=curlingVisual.pendingPayload;curlingVisual.pendingPayload=null;
       if(results)queueMicrotask(()=>{renderResults(results);showScreen("results");sound.beep(880,.14,"triangle");});

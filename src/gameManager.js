@@ -573,6 +573,7 @@ class GameManager {
       room.curlingThrows[socketId]=throwNumber;
       room.curlingShotLog.push({stoneId,playerId:socketId,guess,throwNumber});
       room.curlingPlaybackUntil=Date.now()+room.curlingTrajectory.length*25+1200;
+      room.curlingShotSeq=(room.curlingShotSeq||0)+1;   // identifies this shot to clients
     } else if(mode==="golf"){
       if(Date.now()<(room.golf?.playbackUntil||0))return{ok:false,error:"Wait for the ball to stop."};
       const direction=Number(rawGuess?.direction),power=Number(rawGuess?.power);
@@ -641,7 +642,7 @@ class GameManager {
     room.turnIndex = 0;
     room.curlingStones=[];
     room.curlingThrows={};room.curlingShotLog=[];room.curlingPlaybackUntil=0;
-    room.curlingTrajectory=null;
+    room.curlingTrajectory=null;room.curlingShotSeq=0;
     this.startCurlingTurn(room);
   }
 
@@ -716,6 +717,12 @@ class GameManager {
   }
 
   curlingState(room, lastPlayerId, lastGuess) {
+    // Only hand out the trajectory while its playback is actually running.
+    // It used to be included in every state emit and was cleared only at the
+    // start of a round, so each turn:update made clients restart the previous
+    // shot's animation from frame zero — replaying its collision and stone-off
+    // sounds while something else entirely was happening on screen.
+    const playing = Date.now() < (room.curlingPlaybackUntil || 0);
     return {
       mode: "curling",
       lastPlayerId,
@@ -724,8 +731,11 @@ class GameManager {
       order: this.curlingOrderView(room),
       shots: this.curlingShots(room),
       stones:room.curlingStones,
-      trajectory:room.curlingTrajectory,
-      collisionFrames:room.curlingCollisionFrames||[]
+      trajectory: playing ? room.curlingTrajectory : null,
+      // Lets the client tell a genuinely new shot from a repeat of the one it
+      // is already animating, so a mid-playback update never restarts it.
+      trajectoryId: playing ? (room.curlingShotSeq || 0) : 0,
+      collisionFrames: playing ? (room.curlingCollisionFrames || []) : []
     };
   }
 
