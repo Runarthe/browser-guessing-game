@@ -1927,6 +1927,42 @@ class GameManager {
     this.armArenaTick(room);
   }
 
+  /**
+   * Slim per-player state for the pong tick, which fires ~18x a second.
+   *
+   * Sending the full arenaPublic() players here cost ~3.7KB per tick — around
+   * 520 KB/s for an eight-player room — because each entry carried 25 fields,
+   * most of them belonging to other minigames (lap, checkpoint, coins,
+   * painterSpeedUntil...). The renderer reads four. Stable fields like name and
+   * avatar arrive once in arena:start and are merged client-side, so they do
+   * not need repeating every frame.
+   */
+  pongPlayers(room) {
+    const a = room.arena;
+    // Rounded: "360.48291015625" and "360.5" render identically, but the first
+    // costs 12 extra bytes 18 times a second for every player.
+    const r1 = (n) => (Number.isFinite(n) ? Math.round(n * 10) / 10 : n);
+    const r3 = (n) => (Number.isFinite(n) ? Math.round(n * 1000) / 1000 : n);
+    return this.roomManager.connectedPlayers(room).map((p) => {
+      const pos = a.positions[p.id] || {};
+      return {
+        playerId: p.id,
+        x: r1(pos.x), y: r1(pos.y),
+        paddleT: r3(pos.paddleT),
+        lives: a.lives[p.id],
+        eliminated: !!a.eliminated[p.id]
+      };
+    });
+  }
+
+  /** Ball state, rounded for the same reason as pongPlayers. */
+  pongBalls(room) {
+    const r1 = (n) => (Number.isFinite(n) ? Math.round(n * 10) / 10 : n);
+    return (room.arena.balls || []).map((b) => ({
+      id: b.id, x: r1(b.x), y: r1(b.y), vx: r1(b.vx), vy: r1(b.vy)
+    }));
+  }
+
   arenaPublic(room) {
     const a = room.arena;
     return {
@@ -2089,7 +2125,7 @@ class GameManager {
           ball.y-=hit.ny*Math.max(0,hit.projection-(apothem-10));
         }
       }
-      this.emitRoom(room.code,"arena:pong",{balls:a.balls,lives:a.lives,players:this.arenaPublic(room).players});
+      this.emitRoom(room.code,"arena:pong",{balls:this.pongBalls(room),lives:a.lives,players:this.pongPlayers(room)});
     } else if(a.mode==="flappy"){
       const dt=Math.min(.08,(now-(a.physicsAt||now))/1000);a.physicsAt=now;
       const progress=(now-a.startedAt)*.12;

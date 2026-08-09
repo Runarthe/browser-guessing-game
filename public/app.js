@@ -4121,7 +4121,9 @@ function updateArenaPlayers(players) {
     }
   }
   const own=(players||[]).find((p)=>p.playerId===state.selfId);
-  if(own) arena.players.set(state.selfId,own);
+  // Merge rather than replace: slim per-mode packets omit stable fields like
+  // name and avatar (sent once in arena:start), and overwriting would erase them.
+  if(own) arena.players.set(state.selfId,{...(arena.players.get(state.selfId)||{}),...own});
 }
 function stabilizeArenaPosition(p){
   if(Number.isFinite(p.x)&&Number.isFinite(p.y)){
