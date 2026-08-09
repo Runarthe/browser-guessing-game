@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * Pure, side-effect-free scoring logic for Mini Mayhem.
+ * Pure, side-effect-free scoring logic for Confetti.
  *
  * Rank-based scoring:
  *   1st closest: 100 points

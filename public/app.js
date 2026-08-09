@@ -1,6 +1,6 @@
 "use strict";
 
-/* Mini Mayhem — client. The server is authoritative; this file only renders
+/* Confetti — client. The server is authoritative; this file only renders
    state pushed from the server and forwards player actions. */
 
 const socket = io();
@@ -66,7 +66,7 @@ function cosmeticRequirement(type, value) {
   const item = list.find((i) => (i.id || i.value) === value);
   return item ? P.describe(item.req) : "";
 }
-const AVATAR_KEY = "closest-wins-avatar";
+const AVATAR_KEY = "confetti-avatar";
 let myAvatar = loadAvatar();
 function loadAvatar() {
   try {
@@ -114,7 +114,7 @@ function titleHtml(av) {
 // the same game. Deliberately localStorage, not sessionStorage: mobile browsers
 // evict background tabs aggressively, and sessionStorage dies with the tab,
 // which is exactly the case players hit most.
-const SESSION_KEY = "closest-wins-session";
+const SESSION_KEY = "confetti-session";
 // Long enough to survive a phone locking through a whole party, short enough
 // that tomorrow's launch doesn't try to rejoin a dead room.
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
@@ -224,8 +224,34 @@ function flashError(el, message) {
   if (message) setTimeout(() => { if (el.textContent === message) el.textContent = ""; }, 4000);
 }
 
+// ---- Saved-data migration ---------------------------------------------------
+// The game was renamed from "Mini Mayhem" to "Confetti: Pocket Party". Storage
+// keys were renamed with it, so anything already saved on a device would have
+// silently vanished — settings, unlocked cosmetics, match history. This copies
+// the old keys across once. Safe to delete after the first public release,
+// since by then nobody will still be holding pre-rename data.
+(function migrateLegacyStorage() {
+  const RENAMES = [
+    ["mini-mayhem-sfx-on", "confetti-sfx-on"],
+    ["mini-mayhem-sfx-volume", "confetti-sfx-volume"],
+    ["mini-mayhem-music-volume", "confetti-music-volume"],
+    ["mini-mayhem-fullscreen", "confetti-fullscreen"],
+    ["mini-mayhem-progress", "confetti-progress"],
+    ["closest-wins-avatar", "confetti-avatar"],
+    ["closest-wins-session", "confetti-session"]
+  ];
+  try {
+    for (const [oldKey, newKey] of RENAMES) {
+      const legacy = localStorage.getItem(oldKey);
+      if (legacy !== null && localStorage.getItem(newKey) === null) {
+        localStorage.setItem(newKey, legacy);
+      }
+    }
+  } catch { /* private mode: nothing to migrate into anyway */ }
+})();
+
 // ---- Sound ------------------------------------------------------------------
-const SETTINGS_KEYS = { sfxOn: "mini-mayhem-sfx-on", sfxVolume: "mini-mayhem-sfx-volume" };
+const SETTINGS_KEYS = { sfxOn: "confetti-sfx-on", sfxVolume: "confetti-sfx-volume" };
 function loadSetting(key, fallback) {
   try {
     const raw = localStorage.getItem(key);
@@ -387,7 +413,7 @@ function applySoundToggle(next) {
   saveSetting(SETTINGS_KEYS.sfxOn, sound.on);
   const btn = $("sound-btn");
   if (btn) btn.textContent = sound.on ? "🔊" : "🔇";
-  document.dispatchEvent(new CustomEvent("minimayhem:audio-changed"));
+  document.dispatchEvent(new CustomEvent("confetti:audio-changed"));
 }
 $("sound-btn").addEventListener("click", () => {
   applySoundToggle(!sound.on);
@@ -402,7 +428,7 @@ const music = {
     action:"audio/music/action.ogg",race:"audio/music/race.ogg",fire:"audio/music/fire.ogg",champion:"audio/music/champion.ogg"},
   trackGain:{lobby:.55,golf:.20,wheelSpin:.18},
   decks:[new Audio(),new Audio()],active:0,current:null,pending:"lobby",unlocked:false,muted:false,sceneMuted:false,stingers:new Set(),
-  volume:Math.max(0,Math.min(1,Number(localStorage.getItem("mini-mayhem-music-volume")??.10))),fadeToken:0,
+  volume:Math.max(0,Math.min(1,Number(localStorage.getItem("confetti-music-volume")??.10))),fadeToken:0,
   init(){
     this.decks.forEach((a)=>{a.loop=true;a.preload="auto";a.volume=0;});
     const slider=$("music-volume");if(slider)slider.value=Math.round(this.volume*100);
@@ -471,12 +497,12 @@ const music = {
   },
   stopStingers(){for(const a of this.stingers){a.pause();a.currentTime=0;}this.stingers.clear();this.decks[this.active].volume=this.targetVolume();},
   setVolume(raw){this.volume=Math.max(0,Math.min(1,raw));this.muted=this.volume===0;
-    localStorage.setItem("mini-mayhem-music-volume",String(this.volume));this.decks[this.active].volume=this.targetVolume();if(this.muted)this.stopStingers();this.paintButton();},
+    localStorage.setItem("confetti-music-volume",String(this.volume));this.decks[this.active].volume=this.targetVolume();if(this.muted)this.stopStingers();this.paintButton();},
   toggle(){this.muted=!this.muted;this.decks[this.active].volume=this.targetVolume();if(this.muted)this.stopStingers();else this.unlock();this.paintButton();},
   paintButton(){
     const btn=$("music-btn");if(btn)btn.textContent=this.muted||this.volume===0?"🔇":"🎵";
     const slider=$("music-volume");if(slider)slider.value=Math.round(this.volume*100);
-    document.dispatchEvent(new CustomEvent("minimayhem:audio-changed"));
+    document.dispatchEvent(new CustomEvent("confetti:audio-changed"));
   }
 };
 $("music-volume")?.addEventListener("input",(e)=>music.setVolume(Number(e.target.value)/100));
@@ -485,7 +511,7 @@ $("music-btn")?.addEventListener("click",()=>music.toggle());
 // Exposed so the settings panel (settingsMenu.js) can drive audio without
 // living inside this file. Kept deliberately small — it is a control surface,
 // not an invitation to reach into the game's internals.
-window.MiniMayhemAudio = {
+window.ConfettiAudio = {
   music,
   getMusicLevel: () => music.volume,
   setMusicLevel: (v) => music.setVolume(v),
@@ -597,30 +623,30 @@ $("menu-couch")?.addEventListener("click", () => {
 });
 $("menu-settings")?.addEventListener("click", () => {
   sound.ensure(); sfx.play("uiClick");
-  window.MiniMayhemMenu?.openSettings();
+  window.ConfettiMenu?.openSettings();
 });
 $("menu-unlocks")?.addEventListener("click", () => {
   sound.ensure(); sfx.play("uiClick");
-  window.MiniMayhemMenu?.openUnlocks();
+  window.ConfettiMenu?.openUnlocks();
 });
 $("menu-credits")?.addEventListener("click", () => {
   sound.ensure(); sfx.play("uiClick");
-  window.MiniMayhemMenu?.openCredits();
+  window.ConfettiMenu?.openCredits();
 });
 $("home-back")?.addEventListener("click", () => { sfx.play("uiClick"); showScreen("start"); });
 
 // Exit only exists in the desktop build; a browser tab has nothing to quit.
-if (window.miniMayhemDesktop?.quit) {
+if (window.confettiDesktop?.quit) {
   const exitBtn = $("menu-exit");
   exitBtn?.classList.remove("hidden");
   exitBtn?.addEventListener("click", async () => {
     const ok = await confirmDialog({
-      title: "Exit Mini Mayhem?",
+      title: "Exit Confetti?",
       text: "Any game in progress will end.",
       confirmLabel: "Exit",
       danger: true
     });
-    if (ok) window.miniMayhemDesktop.quit();
+    if (ok) window.confettiDesktop.quit();
   });
 }
 

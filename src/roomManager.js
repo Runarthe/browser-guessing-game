@@ -3,7 +3,7 @@
 const crypto = require("crypto");
 
 /**
- * Room lifecycle and membership management for Mini Mayhem.
+ * Room lifecycle and membership management for Confetti.
  *
  * Rooms live entirely in server memory. This module owns room creation, code
  * generation, player membership, host identity/migration and cleanup. It does

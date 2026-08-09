@@ -3,10 +3,10 @@
  *
  * Self-contained (own markup + inline styles) so it does not compete with
  * app.js or styles.css for the same lines. It talks to the game through two
- * small surfaces only: window.MiniMayhemAudio and window.PlayerProgress. */
+ * small surfaces only: window.ConfettiAudio and window.PlayerProgress. */
 (function () {
 
-  const FULLSCREEN_KEY = "mini-mayhem-fullscreen";
+  const FULLSCREEN_KEY = "confetti-fullscreen";
 
   // ---- Generic overlay -----------------------------------------------------
   let overlay = null;
@@ -108,7 +108,7 @@
 
   function openSettings() {
     openPanel("Settings", (panel) => {
-      const audio = window.MiniMayhemAudio;
+      const audio = window.ConfettiAudio;
       if (audio) {
         slider(panel, "Music volume", audio.getMusicLevel, audio.setMusicLevel);
         const sfxInput = slider(panel, "Sound effects volume", audio.getSfxLevel, (v) => {
@@ -271,5 +271,5 @@
     });
   }
 
-  window.MiniMayhemMenu = { openSettings, openCredits, openUnlocks, closePanel };
+  window.ConfettiMenu = { openSettings, openCredits, openUnlocks, closePanel };
 })();

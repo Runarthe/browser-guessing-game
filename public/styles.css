@@ -928,3 +928,7 @@ body {
 .cosmetic-field{flex:1;min-width:0}
 .cosmetic-field select{width:100%}
 #char-preview{display:flex;align-items:center;justify-content:center}
+
+/* ---- Logo subtitle ------------------------------------------------------- */
+.logo-sub{margin:-6px 0 2px;text-align:center;font-size:12px;font-weight:800;
+  letter-spacing:.34em;text-indent:.34em;opacity:.62}

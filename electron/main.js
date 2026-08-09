@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * Electron entry point for the Mini Mayhem desktop build.
+ * Electron entry point for the Confetti desktop build.
  *
  * The desktop app is a thin shell around the existing Node game server:
  *   1. start the server in-process on an OS-assigned free port,
@@ -50,7 +50,7 @@ function createWindow(info) {
     backgroundColor: "#0f1226",
     show: false,
     autoHideMenuBar: true,
-    title: "Mini Mayhem",
+    title: "Confetti",
     // Packaged builds take the icon from the exe; this is for `npm run desktop`.
     icon: path.join(ROOT, "build", "icon.ico"),
     webPreferences: {
@@ -76,17 +76,17 @@ function createWindow(info) {
 }
 
 // The renderer asks for the join address to show hosts where phones connect.
-ipcMain.handle("minimayhem:host-info", () => serverInfo);
+ipcMain.handle("confetti:host-info", () => serverInfo);
 
 // Exit from the start menu. The renderer has already confirmed with the user.
-ipcMain.on("minimayhem:quit", () => app.quit());
+ipcMain.on("confetti:quit", () => app.quit());
 
 app.whenReady().then(async () => {
   try {
     serverInfo = await startGameServer();
   } catch (err) {
     dialog.showErrorBox(
-      "Mini Mayhem could not start",
+      "Confetti could not start",
       `The game server failed to start.\n\n${err && err.message ? err.message : err}`
     );
     app.quit();

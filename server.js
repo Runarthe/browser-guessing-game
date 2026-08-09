@@ -779,7 +779,7 @@ function stop() {
 // requires this file, it calls start() itself so it can choose the port.
 if (require.main === module) {
   start().then((info) => {
-    console.log(`Mini Mayhem running at ${info.localUrl}`);
+    console.log(`Confetti running at ${info.localUrl}`);
     if (info.lanUrl) console.log(`On this network: ${info.lanUrl}`);
     for (const alt of info.lanUrls.slice(1)) {
       console.log(`     (or, via ${alt.name}: ${alt.url})`);

@@ -1,4 +1,4 @@
-# Mini Mayhem — desktop build
+# Confetti — desktop build
 
 Wraps the existing Node game server in an Electron window so the game ships as a
 normal Windows application instead of something you start from a terminal.
@@ -14,7 +14,7 @@ Nothing here touches game logic. `npm start` behaves exactly as it always has.
    resolved URL.
 3. The server binds `0.0.0.0`, so other devices on the same wifi can join using
    the LAN URL. `electron/preload.js` exposes that to the client as
-   `window.miniMayhemDesktop.getHostInfo()`.
+   `window.confettiDesktop.getHostInfo()`.
 
 ## Commands
 

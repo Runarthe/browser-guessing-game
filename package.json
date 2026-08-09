@@ -1,7 +1,7 @@
 {
-  "name": "mini-mayhem",
+  "name": "confetti-pocket-party",
   "version": "1.0.0",
-  "description": "Mini Mayhem - a browser-based multiplayer minigame party.",
+  "description": "Confetti: Pocket Party - a browser-based multiplayer party game where everyone plays from their own phone.",
   "main": "electron/main.js",
   "type": "commonjs",
   "author": "Runar Warberg",
@@ -27,8 +27,8 @@
     "node": ">=18"
   },
   "build": {
-    "appId": "com.runar.minimayhem",
-    "productName": "Mini Mayhem",
+    "appId": "com.runar.confettipocketparty",
+    "productName": "Confetti Pocket Party",
     "directories": {
       "output": "dist",
       "buildResources": "build"
@@ -55,12 +55,12 @@
         "nsis"
       ],
       "icon": "build/icon.ico",
-      "artifactName": "MiniMayhem-${version}-${arch}.${ext}"
+      "artifactName": "ConfettiPocketParty-${version}-${arch}.${ext}"
     },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "shortcutName": "Mini Mayhem",
+      "shortcutName": "Confetti Pocket Party",
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico",
       "installerHeaderIcon": "build/icon.ico",

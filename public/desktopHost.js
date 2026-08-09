@@ -34,7 +34,7 @@
 
   /** The address other devices should use, or null if we can't offer one. */
   async function resolveJoinUrl() {
-    const bridge = window.miniMayhemDesktop;
+    const bridge = window.confettiDesktop;
     if (bridge && typeof bridge.getHostInfo === "function") {
       try {
         const info = await bridge.getHostInfo();

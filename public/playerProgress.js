@@ -9,7 +9,7 @@
  * Depends on progression.js for the catalogue. */
 (function (root) {
 
-  const KEY = "mini-mayhem-progress";
+  const KEY = "confetti-progress";
   const VERSION = 1;
 
   function blank() {
