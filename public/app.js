@@ -110,16 +110,33 @@ function titleHtml(av) {
   return `<span class="ava-title">${esc(entry.label)}</span>`;
 }
 
-// Session persistence so a page refresh rejoins the same game.
+// Session persistence so a refresh — or a phone that closed the tab — rejoins
+// the same game. Deliberately localStorage, not sessionStorage: mobile browsers
+// evict background tabs aggressively, and sessionStorage dies with the tab,
+// which is exactly the case players hit most.
 const SESSION_KEY = "closest-wins-session";
+// Long enough to survive a phone locking through a whole party, short enough
+// that tomorrow's launch doesn't try to rejoin a dead room.
+const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
+
 function saveSession(code, token) {
-  try { sessionStorage.setItem(SESSION_KEY, JSON.stringify({ code, token })); } catch {}
+  try {
+    localStorage.setItem(SESSION_KEY, JSON.stringify({ code, token, savedAt: Date.now() }));
+  } catch { /* private mode */ }
 }
 function loadSession() {
-  try { return JSON.parse(sessionStorage.getItem(SESSION_KEY) || "null"); } catch { return null; }
+  try {
+    const raw = JSON.parse(localStorage.getItem(SESSION_KEY) || "null");
+    if (!raw || !raw.code || !raw.token) return null;
+    if (raw.savedAt && Date.now() - raw.savedAt > SESSION_TTL_MS) { clearSession(); return null; }
+    return raw;
+  } catch { return null; }
 }
 function clearSession() {
-  try { sessionStorage.removeItem(SESSION_KEY); } catch {}
+  try {
+    localStorage.removeItem(SESSION_KEY);
+    sessionStorage.removeItem(SESSION_KEY);   // clear the pre-localStorage entry too
+  } catch { /* private mode */ }
 }
 
 let timerInterval = null;
@@ -719,7 +736,10 @@ function resetToHome() {
 socket.on("connect", () => {
   hideBanner();
   const saved = loadSession();
-  if (saved && saved.code && saved.token && (currentScreen === "home" || reconnectNeeded)) {
+  // Attempt a rejoin whenever we are not already in a room. Checking for a
+  // specific screen was fragile — adding the start menu silently broke resume,
+  // because a fresh load now lands on "start" rather than "home".
+  if (saved && (!state.room || reconnectNeeded)) {
     socket.emit("room:rejoin", { roomCode: saved.code, token: saved.token });
   }
   reconnectNeeded = false;

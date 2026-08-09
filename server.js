@@ -381,7 +381,9 @@ io.on("connection", (socket) => {
   });
 
   socket.on("room:leave", () => {
-    leaveCurrentRoom(socket);
+    // Pressing Leave is intentional, so give up the seat immediately rather
+    // than holding it through the disconnect grace period.
+    leaveCurrentRoom(socket, { explicit: true });
   });
 
   socket.on("game:start", () => {
@@ -635,18 +637,31 @@ io.on("connection", (socket) => {
     leaveCurrentRoom(socket);
   });
 
-  function leaveCurrentRoom(sock) {
+  function leaveCurrentRoom(sock, { explicit = false } = {}) {
     const code = sock.data.roomCode;
     if (!code) return;
     const room = roomManager.getRoom(code);
     const wasInGame = room && room.state !== GAME_STATES.LOBBY;
 
-    const { room: updated, hostChanged, deleted } = roomManager.removePlayer(
+    const { room: updated, hostChanged, deleted, empty } = roomManager.removePlayer(
       sock.id,
-      code
+      code,
+      { explicit }
     );
     sock.leave(code);
     sock.data.roomCode = null;
+
+    if (empty) {
+      // Nobody is connected, but the room is held briefly so people can return.
+      // Round timers deliberately keep running: freezing them would leave a
+      // rejoining player staring at a round whose deadline has already passed
+      // and which nothing will ever resolve. Emitting into an empty room is
+      // harmless, and the game simply advances as it would have.
+      // The bot loop does stop — there is nobody for bots to play against.
+      const idleBots = testBotLoops.get(code);
+      if (idleBots) { clearInterval(idleBots); testBotLoops.delete(code); }
+      return;
+    }
 
     if (deleted || !updated) {
       // Room gone; if it was mid-game, stop its timer.
@@ -668,11 +683,18 @@ io.on("connection", (socket) => {
 
 // Periodically clean up inactive rooms (~1 hour TTL).
 setInterval(() => {
-  const removed = roomManager.cleanupInactiveRooms();
+  const { removed, changed } = roomManager.cleanupInactiveRooms();
   if (removed > 0) {
     console.log(`Cleaned up ${removed} inactive room(s).`);
   }
-}, 5 * 60 * 1000).unref();
+  // Seats released by the sweep have to be reflected for everyone still in the
+  // lobby, otherwise a ghost player lingers on their screens.
+  for (const code of changed) {
+    const room = roomManager.getRoom(code);
+    if (room) io.to(code).emit("room:updated", roomView(room));
+  }
+// Runs often because it now governs grace periods, not just a one-hour TTL.
+}, 20 * 1000).unref();
 
 // Picking "the" local address is guesswork on a machine with VPNs and
 // hypervisors, so rank candidates instead of taking the first one. Getting this

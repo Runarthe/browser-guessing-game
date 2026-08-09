@@ -263,8 +263,11 @@ simultaneous `round:question` / `round:progress` pair.
 ## Known limitations
 
 - Rooms live in memory only, so a server restart drops all active games.
-- Reconnect relies on `sessionStorage`, so it works across a refresh or brief
-  disconnect but not after the browser tab is closed.
+  Disconnects are handled (see below), but a restart is not.
+- Reconnect uses `localStorage` with a 12-hour expiry, so it survives a refresh,
+  a closed tab, and a phone evicting the page from memory. A dropped lobby seat
+  is held for 2 minutes and an emptied room for 5, so a screen lock or router
+  blip does not end the party. Pressing Leave gives the seat up immediately.
 - Question answers are approximate by nature — the game rewards closeness, not
   exactness.
 - Single Node process; no horizontal scaling.

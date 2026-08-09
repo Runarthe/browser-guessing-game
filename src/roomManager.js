@@ -27,6 +27,12 @@ const NAME_MAX = 20;
 
 // Rooms inactive for longer than this are cleaned up.
 const ROOM_TTL_MS = 60 * 60 * 1000; // ~1 hour
+// A lobby seat is held this long after a drop, so locking your phone or a brief
+// wifi stumble doesn't cost you your place.
+const DISCONNECT_GRACE_MS = 2 * 60 * 1000;
+// A room with nobody in it survives this long, so a total blip (router reset,
+// host backgrounding the app) doesn't destroy a game everyone can return to.
+const EMPTY_ROOM_GRACE_MS = 5 * 60 * 1000;
 
 // Available game modes and settings bounds.
 const GAME_MODES = ["trivia", "timeline", "curling", "golf", "bomb", "map", "platformer", "drawing", "pushy", "redlight", "hidebomb", "colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "runner", "painter", "pong", "doors"];
@@ -198,6 +204,9 @@ class RoomManager {
 
     const oldId = player.id;
     const wasHost = room.hostId === oldId;
+    // They're back: cancel both grace timers.
+    player.disconnectedAt = null;
+    room.emptySince = null;
 
     // Re-key the player entry under the new socket id.
     if (oldId !== newSocketId) {
@@ -369,29 +378,41 @@ class RoomManager {
    *
    * @returns {{room: object|null, hostChanged: boolean, deleted: boolean}}
    */
-  removePlayer(socketId, code) {
+  removePlayer(socketId, code, { explicit = false } = {}) {
     const room = this.getRoom(code);
     if (!room || !room.players[socketId]) {
-      return { room: null, hostChanged: false, deleted: false };
+      return { room: null, hostChanged: false, deleted: false, empty: false };
     }
 
     const wasHost = room.hostId === socketId;
+    const now = Date.now();
+    const player = room.players[socketId];
 
-    if (room.state === GAME_STATES.LOBBY) {
+    if (explicit) {
+      // They pressed Leave. Honour it immediately — no seat held.
       delete room.players[socketId];
-    } else {
-      const player = room.players[socketId];
+    } else if (room.state === GAME_STATES.LOBBY) {
+      // A dropped connection in the lobby is usually a phone locking its
+      // screen, not someone leaving. Hold the seat briefly so they come back
+      // to the same spot instead of losing it.
       player.connected = false;
+      player.disconnectedAt = now;
+    } else {
+      player.connected = false;
+      player.disconnectedAt = now;
       player.guess = null;
     }
-    room.lastActivity = Date.now();
+    room.lastActivity = now;
 
-    // Delete the room if nobody is connected any more.
+    // An empty room is kept for a grace period rather than destroyed, so a
+    // brief total outage (router blip, host alt-tabbing on mobile) doesn't
+    // vaporise a game in progress. Cleanup sweeps it up if nobody returns.
     const stillConnected = this.connectedPlayers(room);
     if (stillConnected.length === 0) {
-      this.rooms.delete(room.code);
-      return { room: null, hostChanged: false, deleted: true };
+      room.emptySince = now;
+      return { room, hostChanged: false, deleted: false, empty: true };
     }
+    room.emptySince = null;
 
     // Migrate host if the host left.
     let hostChanged = false;
@@ -400,7 +421,7 @@ class RoomManager {
       hostChanged = true;
     }
 
-    return { room, hostChanged, deleted: false };
+    return { room, hostChanged, deleted: false, empty: false };
   }
 
   deleteRoom(code) {
@@ -408,16 +429,52 @@ class RoomManager {
     if (room) this.rooms.delete(room.code);
   }
 
-  /** Remove rooms that have been inactive beyond the TTL. */
+  /**
+   * Sweep expired state. Handles three separate lifetimes:
+   *   - lobby seats held for a disconnected player (short)
+   *   - rooms nobody has returned to (medium)
+   *   - rooms idle far too long (the original TTL)
+   *
+   * @returns {{removed: number, changed: string[]}} `changed` lists room codes
+   *          whose player list altered, so the caller can re-broadcast them.
+   */
   cleanupInactiveRooms(now = Date.now()) {
     let removed = 0;
+    const changed = [];
     for (const [code, room] of this.rooms) {
       if (now - room.lastActivity > ROOM_TTL_MS) {
         this.rooms.delete(code);
         removed++;
+        continue;
+      }
+      // Nobody came back — drop the room once the grace period lapses.
+      if (room.emptySince && now - room.emptySince > EMPTY_ROOM_GRACE_MS) {
+        this.rooms.delete(code);
+        removed++;
+        continue;
+      }
+      // Release lobby seats still held by players who never returned.
+      if (room.state === GAME_STATES.LOBBY) {
+        let dropped = false;
+        for (const [id, player] of Object.entries(room.players)) {
+          if (player.connected === false && player.disconnectedAt &&
+              now - player.disconnectedAt > DISCONNECT_GRACE_MS) {
+            delete room.players[id];
+            dropped = true;
+          }
+        }
+        if (dropped) {
+          const left = this.connectedPlayers(room);
+          if (left.length === 0) {
+            room.emptySince = room.emptySince || now;
+          } else if (!room.players[room.hostId]) {
+            room.hostId = left[0].id;      // host's seat expired; migrate
+          }
+          changed.push(code);
+        }
       }
     }
-    return removed;
+    return { removed, changed };
   }
 }
 
@@ -439,5 +496,7 @@ module.exports = {
   ROOM_CODE_LENGTH,
   NAME_MIN,
   NAME_MAX,
-  ROOM_TTL_MS
+  ROOM_TTL_MS,
+  DISCONNECT_GRACE_MS,
+  EMPTY_ROOM_GRACE_MS
 };
