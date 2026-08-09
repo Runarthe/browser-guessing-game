@@ -13,5 +13,7 @@ const { contextBridge, ipcRenderer } = require("electron");
 contextBridge.exposeInMainWorld("miniMayhemDesktop", {
   isDesktop: true,
   /** @returns {Promise<{port:number, localUrl:string, lanUrl:string|null}>} */
-  getHostInfo: () => ipcRenderer.invoke("minimayhem:host-info")
+  getHostInfo: () => ipcRenderer.invoke("minimayhem:host-info"),
+  /** Quit from the in-game Exit menu entry. */
+  quit: () => ipcRenderer.send("minimayhem:quit")
 });

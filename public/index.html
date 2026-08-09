@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#0f1226" />
   <title>Mini Mayhem</title>
-  <link rel="stylesheet" href="styles.css?v=20260804-26" />
+  <link rel="stylesheet" href="styles.css?v=20260808-28" />
 </head>
   <body>
     <div id="game-countdown" class="game-countdown hidden" aria-live="assertive">
@@ -36,9 +36,39 @@
 
   <main id="app">
 
-    <!-- ===================== HOME ===================== -->
-    <section class="screen" id="screen-home">
+    <!-- ===================== START MENU ===================== -->
+    <section class="screen" id="screen-start">
       <div class="card hero">
+        <h1 class="logo">MINI<span>MAYHEM</span></h1>
+        <p class="tagline">Spin. Compete. Claim the crown.</p>
+
+        <div class="menu-list" id="start-menu">
+          <button id="menu-couch" class="btn btn-primary btn-block menu-item">
+            <span class="menu-item-title">🛋️ Couch party</span>
+            <span class="menu-item-sub">Everyone joins from their own phone, same wifi</span>
+          </button>
+          <button id="menu-online" class="btn btn-secondary btn-block menu-item" disabled aria-disabled="true">
+            <span class="menu-item-title">🌐 Online party with friends</span>
+            <span class="menu-item-sub">Coming soon</span>
+          </button>
+          <button id="menu-unlocks" class="btn btn-secondary btn-block menu-item">
+            <span class="menu-item-title">🏆 Unlockables &amp; stats</span>
+            <span class="menu-item-sub" id="menu-unlocks-sub">Track your progress</span>
+          </button>
+          <button id="menu-settings" class="btn btn-secondary btn-block menu-item">
+            <span class="menu-item-title">⚙️ Settings</span>
+            <span class="menu-item-sub">Audio and display</span>
+          </button>
+          <button id="menu-credits" class="btn btn-ghost btn-block">Credits</button>
+          <button id="menu-exit" class="btn btn-ghost btn-block hidden">Exit game</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== HOME (party setup) ===================== -->
+    <section class="screen hidden" id="screen-home">
+      <div class="card hero">
+        <button id="home-back" class="btn btn-ghost">← Back to menu</button>
         <h1 class="logo">MINI<span>MAYHEM</span></h1>
         <p class="tagline">Spin. Compete. Claim the crown.</p>
 
@@ -52,6 +82,17 @@
           <div class="creator-grids">
             <div class="emoji-grid" id="emoji-grid"></div>
             <div class="color-grid" id="color-grid"></div>
+          </div>
+        </div>
+
+        <div class="cosmetic-row">
+          <div class="cosmetic-field">
+            <label class="field-label" for="title-select">Title</label>
+            <select id="title-select" class="text-input"></select>
+          </div>
+          <div class="cosmetic-field">
+            <label class="field-label" for="frame-select">Frame</label>
+            <select id="frame-select" class="text-input"></select>
           </div>
         </div>
 
@@ -538,8 +579,11 @@
   <script src="characters.js?v=20260725-15"></script>
   <script src="arena25d.js?v=20260725-15"></script>
   <script src="vanishMaps.js?v=20260727-45"></script>
-  <script src="app.js?v=20260807-154"></script>
+  <script src="progression.js?v=20260808-03"></script>
+  <script src="playerProgress.js?v=20260808-03"></script>
+  <script src="app.js?v=20260808-155"></script>
   <script src="qrLite.js?v=20260808-02"></script>
   <script src="desktopHost.js?v=20260808-02"></script>
+  <script src="menu.js?v=20260808-03"></script>
 </body>
 </html>

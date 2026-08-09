@@ -25,7 +25,11 @@ const MODE_INFO = {
 };
 
 // Character options — must match the server's allowed sets (server validates).
-const AVATAR_EMOJIS = ["🦊","🐼","🐸","🐙","🦉","🐝","🦄","🐲","🐳","🦁","🐧","🦖","🐢","🐬","🦇","🐰"];
+// Sourced from the shared catalogue (progression.js) so unlockables appear here
+// and match what the server will accept. Falls back to the original 16 if the
+// catalogue somehow failed to load, so the creator is never empty.
+const AVATAR_EMOJIS = window.Progression?.EMOJI_VALUES
+  || ["🦊","🐼","🐸","🐙","🦉","🐝","🦄","🐲","🐳","🦁","🐧","🦖","🐢","🐬","🦇","🐰"];
 MODE_INFO.map = { name: "Place It", emoji: "🗺️", desc: "Drop a pin on the world map. Closest wins." };
 MODE_INFO.platformer = { name: "Build & Race", emoji: "🏗️", desc: "Place an obstacle each round, then race the course." };
 MODE_INFO.drawing = { name: "Drawing", emoji: "🎨", desc: "One player draws a secret word while everyone else guesses." };
@@ -43,7 +47,25 @@ MODE_INFO.painter = { name: "Territory Painter", emoji: "🎨", desc: "Every til
 MODE_INFO.pong = { name: "Polygon Pong", emoji: "🏓", desc: "Defend your side of the arena. Three misses and you are out." };
 MODE_INFO.doors = { name: "Fire Escape", emoji: "🔥", desc: "Auto-run from the flames, switch into a mystery lane, and survive its hidden detour." };
 MODE_INFO.golf = { name: "Ricochet Golf", emoji: "⛳", desc: "Aim and set power, bank shots around an L-shaped course, collide with rivals, and let the player furthest from the hole shoot next." };
-const AVATAR_COLORS = ["#ff6b6b","#ffcb3d","#4ade80","#60a5fa","#f472b6","#a78bfa","#22d3ee","#fb923c"];
+const AVATAR_COLORS = window.Progression?.COLOR_VALUES
+  || ["#ff6b6b","#ffcb3d","#4ade80","#60a5fa","#f472b6","#a78bfa","#22d3ee","#fb923c"];
+
+/** Is this cosmetic value earned yet? Unknown values are treated as unlocked
+ *  so a missing catalogue can never lock someone out of their own avatar. */
+function cosmeticUnlocked(type, value) {
+  const P = window.Progression, progress = window.PlayerProgress;
+  if (!P || !progress) return true;
+  const list = { emoji: P.EMOJIS, color: P.COLORS, title: P.TITLES, frame: P.FRAMES }[type] || [];
+  const item = list.find((i) => (i.id || i.value) === value);
+  return item ? P.meets(item.req, progress.stats) : true;
+}
+function cosmeticRequirement(type, value) {
+  const P = window.Progression;
+  if (!P) return "";
+  const list = { emoji: P.EMOJIS, color: P.COLORS, title: P.TITLES, frame: P.FRAMES }[type] || [];
+  const item = list.find((i) => (i.id || i.value) === value);
+  return item ? P.describe(item.req) : "";
+}
 const AVATAR_KEY = "closest-wins-avatar";
 let myAvatar = loadAvatar();
 function loadAvatar() {
@@ -57,11 +79,35 @@ function loadAvatar() {
 function saveAvatar() { try { localStorage.setItem(AVATAR_KEY, JSON.stringify(myAvatar)); } catch {} }
 
 /** Small avatar chip for a player object (or an {emoji,color} avatar). */
+/** CSS for an unlocked frame, or "" for none. Frames wrap the avatar so a
+ *  gradient ring is possible, which a plain border cannot do. */
+function frameStyle(frameId) {
+  const frame = window.Progression?.FRAMES.find((f) => f.id === frameId);
+  const s = frame && frame.style;
+  if (!s) return null;
+  const parts = [`padding:${Math.max(2, (s.width || 3) - 1)}px`];
+  if (s.gradient) parts.push(`background:linear-gradient(135deg, ${s.gradient.join(", ")})`);
+  else if (s.color) parts.push(`background:${s.color}`);
+  if (s.glow && s.color) parts.push(`box-shadow:0 0 10px ${s.color}`);
+  if (s.dashed && s.color) parts.push(`outline:2px dashed ${s.color};outline-offset:2px`);
+  return parts.join(";");
+}
+
 function avatarHtml(av) {
   const a = (av && av.avatar) ? av.avatar : av;
   const emoji = (a && a.emoji) || "🎮";
   const color = (a && a.color) || "#888";
-  return `<span class="ava" style="background:${esc(color)}">${esc(emoji)}</span>`;
+  const inner = `<span class="ava" style="background:${esc(color)}">${esc(emoji)}</span>`;
+  const ring = frameStyle(a && a.frame);
+  return ring ? `<span class="ava-frame" style="${esc(ring)}">${inner}</span>` : inner;
+}
+
+/** Earned title shown beside a player's name, or "" when they have none. */
+function titleHtml(av) {
+  const a = (av && av.avatar) ? av.avatar : av;
+  const entry = window.Progression?.TITLES.find((t) => t.id === (a && a.title));
+  if (!entry || !entry.label) return "";
+  return `<span class="ava-title">${esc(entry.label)}</span>`;
 }
 
 // Session persistence so a page refresh rejoins the same game.
@@ -82,6 +128,7 @@ let reconnectNeeded = false;
 // ---- Element helpers --------------------------------------------------------
 const $ = (id) => document.getElementById(id);
 const screens = {
+  start: $("screen-start"),
   home: $("screen-home"),
   lobby: $("screen-lobby"),
   question: $("screen-question"),
@@ -99,7 +146,7 @@ const screens = {
   final: $("screen-final")
 };
 
-let currentScreen = "home";
+let currentScreen = "start";
 function showScreen(name) {
   const previousScreen = currentScreen;
   currentScreen = name;
@@ -107,8 +154,9 @@ function showScreen(name) {
   for (const key of Object.keys(screens)) {
     screens[key].classList.toggle("hidden", key !== name);
   }
-  // The Leave button is available whenever we're in a room.
-  $("leave-top-btn").classList.toggle("hidden", name === "home");
+  // The Leave button is available whenever we're in a room — not on the
+  // title menu or the party-setup screen, where there is nothing to leave.
+  $("leave-top-btn").classList.toggle("hidden", name === "home" || name === "start");
   if(typeof music!=="undefined")music.forScreen(name,previousScreen);
 }
 
@@ -160,8 +208,19 @@ function flashError(el, message) {
 }
 
 // ---- Sound ------------------------------------------------------------------
+const SETTINGS_KEYS = { sfxOn: "mini-mayhem-sfx-on", sfxVolume: "mini-mayhem-sfx-volume" };
+function loadSetting(key, fallback) {
+  try {
+    const raw = localStorage.getItem(key);
+    return raw === null ? fallback : JSON.parse(raw);
+  } catch { return fallback; }
+}
+function saveSetting(key, value) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* private mode */ }
+}
+
 const sound = {
-  on: true, ctx: null, timers:new Set(),
+  on: loadSetting(SETTINGS_KEYS.sfxOn, true), ctx: null, timers:new Set(),
   ensure() {
     if (!this.ctx && typeof AudioContext !== "undefined") this.ctx = new AudioContext();
     if (this.ctx && this.ctx.state === "suspended") this.ctx.resume();
@@ -203,7 +262,17 @@ const sfx = {
     jump: "audio/sfx/jump.ogg?v=2", eliminated: "audio/sfx/eliminated.ogg", pongHit: "audio/sfx/pong-hit.ogg",
     explosion: "audio/sfx/explosion.ogg", stoneOff: "audio/sfx/stone-off.ogg", roll: "audio/sfx/roll.ogg"
   },
-  volume: .28, active: new Set(), lastPlayed: new Map(),
+  // .28 is the tuned baseline; the settings slider scales relative to it so the
+  // per-sound `volume` multipliers scattered through the game stay balanced.
+  baseVolume: .28,
+  volume: .28 * loadSetting(SETTINGS_KEYS.sfxVolume, 1),
+  setLevel(level) {
+    const clamped = Math.max(0, Math.min(1, level));
+    this.volume = this.baseVolume * clamped;
+    saveSetting(SETTINGS_KEYS.sfxVolume, clamped);
+  },
+  getLevel() { return this.volume / this.baseVolume; },
+  active: new Set(), lastPlayed: new Map(),
   play(name, { volume = 1, rate = 1, throttle = 0 } = {}) {
     if (!sound.on || !this.paths[name] || document.hidden) return;
     const now = performance.now(), previous = this.lastPlayed.get(name) || 0;
@@ -295,12 +364,20 @@ const sfx = {
   stopAll() { for (const audio of this.active) { audio.pause(); audio.currentTime = 0; } this.active.clear();this.stopEngine();this.stopCurlingSlide();this.stopRoll(true); }
 };
 
+function applySoundToggle(next) {
+  sound.on = next;
+  if (!sound.on) { sound.stopScheduled(); sfx.stopAll(); }
+  saveSetting(SETTINGS_KEYS.sfxOn, sound.on);
+  const btn = $("sound-btn");
+  if (btn) btn.textContent = sound.on ? "🔊" : "🔇";
+  document.dispatchEvent(new CustomEvent("minimayhem:audio-changed"));
+}
 $("sound-btn").addEventListener("click", () => {
-  sound.on = !sound.on;
-  if(!sound.on){sound.stopScheduled();sfx.stopAll();}
-  $("sound-btn").textContent = sound.on ? "🔊" : "🔇";
+  applySoundToggle(!sound.on);
   if (sound.on) { sound.ensure(); sound.beep(660, 0.1); }
 });
+// Reflect the persisted choice on first paint.
+$("sound-btn").textContent = sound.on ? "🔊" : "🔇";
 
 // ---- Adaptive music --------------------------------------------------------
 const music = {
@@ -311,7 +388,8 @@ const music = {
   volume:Math.max(0,Math.min(1,Number(localStorage.getItem("mini-mayhem-music-volume")??.10))),fadeToken:0,
   init(){
     this.decks.forEach((a)=>{a.loop=true;a.preload="auto";a.volume=0;});
-    $("music-volume").value=Math.round(this.volume*100);this.paintButton();
+    const slider=$("music-volume");if(slider)slider.value=Math.round(this.volume*100);
+    this.paintButton();
     const unlock=()=>this.unlock();
     window.addEventListener("pointerdown",unlock,{once:true,capture:true});window.addEventListener("keydown",unlock,{once:true,capture:true});
     document.addEventListener("visibilitychange",()=>{
@@ -378,10 +456,28 @@ const music = {
   setVolume(raw){this.volume=Math.max(0,Math.min(1,raw));this.muted=this.volume===0;
     localStorage.setItem("mini-mayhem-music-volume",String(this.volume));this.decks[this.active].volume=this.targetVolume();if(this.muted)this.stopStingers();this.paintButton();},
   toggle(){this.muted=!this.muted;this.decks[this.active].volume=this.targetVolume();if(this.muted)this.stopStingers();else this.unlock();this.paintButton();},
-  paintButton(){$("music-btn").textContent=this.muted||this.volume===0?"🔇":"🎵";}
+  paintButton(){
+    const btn=$("music-btn");if(btn)btn.textContent=this.muted||this.volume===0?"🔇":"🎵";
+    const slider=$("music-volume");if(slider)slider.value=Math.round(this.volume*100);
+    document.dispatchEvent(new CustomEvent("minimayhem:audio-changed"));
+  }
 };
-$("music-volume").addEventListener("input",(e)=>music.setVolume(Number(e.target.value)/100));
-$("music-btn").addEventListener("click",()=>music.toggle());
+$("music-volume")?.addEventListener("input",(e)=>music.setVolume(Number(e.target.value)/100));
+$("music-btn")?.addEventListener("click",()=>music.toggle());
+
+// Exposed so the settings panel (settingsMenu.js) can drive audio without
+// living inside this file. Kept deliberately small — it is a control surface,
+// not an invitation to reach into the game's internals.
+window.MiniMayhemAudio = {
+  music,
+  getMusicLevel: () => music.volume,
+  setMusicLevel: (v) => music.setVolume(v),
+  getSfxLevel: () => sfx.getLevel(),
+  setSfxLevel: (v) => { sfx.setLevel(v); if (v > 0 && !sound.on) applySoundToggle(true); },
+  isSfxOn: () => sound.on,
+  setSfxOn: (on) => applySoundToggle(on),
+  previewSfx: () => { sound.ensure(); sfx.play("uiClick"); }
+};
 music.init();
 
 // Add tactile menu feedback without sounding on held movement or joystick
@@ -393,28 +489,61 @@ document.addEventListener("click", (event) => {
 });
 
 // ---- Character creator ------------------------------------------------------
+/** Fill a <select> with catalogue entries, disabling anything not yet earned. */
+function fillCosmeticSelect(el, type, entries, currentId, onPick) {
+  if (!el) return;
+  el.innerHTML = "";
+  for (const entry of entries) {
+    const opt = document.createElement("option");
+    const unlocked = cosmeticUnlocked(type, entry.id);
+    opt.value = entry.id;
+    const base = entry.label || entry.name || entry.id;
+    opt.textContent = unlocked ? (base || "None") : `🔒 ${base} — ${cosmeticRequirement(type, entry.id)}`;
+    opt.disabled = !unlocked;
+    if (entry.id === currentId) opt.selected = true;
+    el.appendChild(opt);
+  }
+  el.onchange = () => onPick(el.value);
+}
+
 function buildCreator() {
   const eg = $("emoji-grid");
   eg.innerHTML = "";
   AVATAR_EMOJIS.forEach((em) => {
+    const unlocked = cosmeticUnlocked("emoji", em);
     const b = document.createElement("button");
-    b.className = "emoji-opt" + (em === myAvatar.emoji ? " on" : "");
-    b.textContent = em;
+    b.className = "emoji-opt" + (em === myAvatar.emoji ? " on" : "") + (unlocked ? "" : " locked");
+    b.textContent = unlocked ? em : "🔒";
+    b.disabled = !unlocked;
+    b.title = unlocked ? "" : cosmeticRequirement("emoji", em);
     b.addEventListener("click", () => { myAvatar.emoji = em; saveAvatar(); buildCreator(); });
     eg.appendChild(b);
   });
   const cg = $("color-grid");
   cg.innerHTML = "";
   AVATAR_COLORS.forEach((col) => {
+    const unlocked = cosmeticUnlocked("color", col);
     const b = document.createElement("button");
-    b.className = "color-opt" + (col === myAvatar.color ? " on" : "");
-    b.style.background = col;
+    b.className = "color-opt" + (col === myAvatar.color ? " on" : "") + (unlocked ? "" : " locked");
+    b.style.background = unlocked ? col : "rgba(255,255,255,.08)";
+    b.disabled = !unlocked;
+    b.title = unlocked ? "" : cosmeticRequirement("color", col);
+    if (!unlocked) b.textContent = "🔒";
     b.addEventListener("click", () => { myAvatar.color = col; saveAvatar(); buildCreator(); });
     cg.appendChild(b);
   });
+
+  const P = window.Progression;
+  if (P) {
+    fillCosmeticSelect($("title-select"), "title", P.TITLES, myAvatar.title || "none",
+      (id) => { myAvatar.title = id; saveAvatar(); buildCreator(); });
+    fillCosmeticSelect($("frame-select"), "frame", P.FRAMES, myAvatar.frame || "none",
+      (id) => { myAvatar.frame = id; saveAvatar(); buildCreator(); });
+  }
+
   const pv = $("char-preview");
-  pv.textContent = myAvatar.emoji;
-  pv.style.background = myAvatar.color;
+  pv.innerHTML = avatarHtml(myAvatar);
+  pv.style.background = "transparent";
 }
 
 function buildLobbyCreator(room) {
@@ -442,6 +571,53 @@ function buildLobbyCreator(room) {
   });
   const preview = $("lobby-char-preview"); preview.textContent = myAvatar.emoji; preview.style.background = myAvatar.color;
 }
+
+// ---- Start menu -------------------------------------------------------------
+$("menu-couch")?.addEventListener("click", () => {
+  sound.ensure();                 // first gesture: unlocks audio for the session
+  sfx.play("uiClick");
+  showScreen("home");
+});
+$("menu-settings")?.addEventListener("click", () => {
+  sound.ensure(); sfx.play("uiClick");
+  window.MiniMayhemMenu?.openSettings();
+});
+$("menu-unlocks")?.addEventListener("click", () => {
+  sound.ensure(); sfx.play("uiClick");
+  window.MiniMayhemMenu?.openUnlocks();
+});
+$("menu-credits")?.addEventListener("click", () => {
+  sound.ensure(); sfx.play("uiClick");
+  window.MiniMayhemMenu?.openCredits();
+});
+$("home-back")?.addEventListener("click", () => { sfx.play("uiClick"); showScreen("start"); });
+
+// Exit only exists in the desktop build; a browser tab has nothing to quit.
+if (window.miniMayhemDesktop?.quit) {
+  const exitBtn = $("menu-exit");
+  exitBtn?.classList.remove("hidden");
+  exitBtn?.addEventListener("click", async () => {
+    const ok = await confirmDialog({
+      title: "Exit Mini Mayhem?",
+      text: "Any game in progress will end.",
+      confirmLabel: "Exit",
+      danger: true
+    });
+    if (ok) window.miniMayhemDesktop.quit();
+  });
+}
+
+/** Keep the menu's progress line honest without opening the panel. */
+function paintMenuProgress() {
+  const el = $("menu-unlocks-sub");
+  if (!el || !window.Progression || !window.PlayerProgress) return;
+  const { unlocked, total } = window.Progression.progressSummary(window.PlayerProgress.stats);
+  const games = window.PlayerProgress.stats.gamesPlayed;
+  el.textContent = games
+    ? `${unlocked} of ${total} unlocked · ${games} games played`
+    : `${unlocked} of ${total} unlocked`;
+}
+paintMenuProgress();
 
 // ---- Home -------------------------------------------------------------------
 $("create-btn").addEventListener("click", () => {
@@ -1072,7 +1248,42 @@ socket.on("battle:started", ({legIndex,mode}) => {
   if (state.room?.arcade) state.room.arcade.legIndex = legIndex;
   state.mode = mode || state.mode;
 });
-socket.on("game:finished", (payload) => { renderFinal(payload); showScreen("final"); });
+socket.on("game:finished", (payload) => {
+  renderFinal(payload); showScreen("final");
+  // Recorded here rather than in renderFinal, because renderFinal also runs on
+  // reconnect/resume and that must not count the same match twice.
+  recordMatchResult(payload);
+});
+
+/** Update local stats from a finished match and celebrate anything new. */
+function recordMatchResult(payload) {
+  const progress = window.PlayerProgress;
+  if (!progress || !payload) return;
+  const winners = payload.winners || (payload.winner ? [payload.winner] : []);
+  const won = winners.some((w) => w.playerId === state.selfId);
+  let unlocked = [];
+  try {
+    unlocked = progress.recordGame({ mode: payload.mode, won });
+  } catch { return; }
+  paintMenuProgress();
+  if (!unlocked.length) return;
+
+  // Translate ids back into something a human recognises.
+  const cat = window.Progression?.catalogue(progress.stats);
+  const all = cat ? [...cat.emojis, ...cat.colors, ...cat.titles, ...cat.frames] : [];
+  const names = unlocked.map((id) => {
+    const item = all.find((i) => (i.id || i.value) === id);
+    if (!item) return id;
+    if (item.type === "emoji") return item.value;
+    if (item.type === "color") return item.name || "New colour";
+    return item.label || item.name || id;
+  }).filter(Boolean);
+
+  setTimeout(() => {
+    showBanner(`🎉 Unlocked: ${names.join(" · ")}`, 6000);
+    sfx.play("coin");
+  }, 2600);   // let the podium reveal land first
+}
 
 $("inter-next-btn").addEventListener("click", () => { sound.beep(560, 0.1); socket.emit("arcade:advance"); });
 $("battle-spin-btn").addEventListener("click", () => {
@@ -1249,6 +1460,7 @@ function renderLobby(room) {
     li.innerHTML =
       avatarHtml(p) +
       `<span class="player-name ${isSelf ? "self" : ""}">${esc(p.name)}</span>` +
+      titleHtml(p) +
       (isHost ? `<span class="badge">HOST</span>` : (p.isBot ? `<span class="badge">BOT</span>` :
         (isSelf ? `<span class="badge you">YOU</span>` : "")));
     list.appendChild(li);

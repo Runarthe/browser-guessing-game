@@ -78,6 +78,9 @@ function createWindow(info) {
 // The renderer asks for the join address to show hosts where phones connect.
 ipcMain.handle("minimayhem:host-info", () => serverInfo);
 
+// Exit from the start menu. The renderer has already confirmed with the user.
+ipcMain.on("minimayhem:quit", () => app.quit());
+
 app.whenReady().then(async () => {
   try {
     serverInfo = await startGameServer();

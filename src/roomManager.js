@@ -37,8 +37,14 @@ const ALLOWED_TARGETS = Array.from({length:20},(_,i)=>i+1);
 const ALLOWED_BATTLE_TARGETS = Array.from({length:15},(_,i)=>i+1);
 
 // Character creator options (validated server-side so clients can't inject junk).
-const AVATAR_EMOJIS = ["🦊", "🐼", "🐸", "🐙", "🦉", "🐝", "🦄", "🐲", "🐳", "🦁", "🐧", "🦖", "🐢", "🐬", "🦇", "🐰"];
-const AVATAR_COLORS = ["#ff6b6b", "#ffcb3d", "#4ade80", "#60a5fa", "#f472b6", "#a78bfa", "#22d3ee", "#fb923c"];
+// The catalogue is shared with the browser via public/progression.js so an
+// unlockable cosmetic can never exist on one side only.
+const Progression = require("../public/progression.js");
+const AVATAR_EMOJIS = Progression.EMOJI_VALUES;
+const AVATAR_COLORS = Progression.COLOR_VALUES;
+// Room capacity used to be implied by AVATAR_COLORS.length, which meant adding
+// a single unlockable colour silently raised the player cap. Now explicit.
+const MAX_PLAYERS = Progression.MAX_PLAYERS;
 
 function defaultSettings() {
   return {
@@ -57,12 +63,16 @@ function defaultSettings() {
   };
 }
 
-/** Clamp a client-supplied avatar to the allowed sets, with defaults. */
+/** Clamp a client-supplied avatar to the allowed sets, with defaults.
+ *  Title and frame are cosmetic and unlocked client-side; the server only
+ *  checks that they name real catalogue entries before broadcasting them. */
 function validateAvatar(raw) {
   const a = raw && typeof raw === "object" ? raw : {};
   return {
     emoji: AVATAR_EMOJIS.includes(a.emoji) ? a.emoji : AVATAR_EMOJIS[0],
-    color: AVATAR_COLORS.includes(a.color) ? a.color : AVATAR_COLORS[1]
+    color: AVATAR_COLORS.includes(a.color) ? a.color : AVATAR_COLORS[1],
+    title: Progression.TITLE_IDS.includes(a.title) ? a.title : "none",
+    frame: Progression.FRAME_IDS.includes(a.frame) ? a.frame : "none"
   };
 }
 
@@ -283,9 +293,8 @@ class RoomManager {
     if (this.isNameTaken(room, check.name)) {
       return { ok: false, error: "That name is already taken in this room." };
     }
-    const usedColors = new Set(this.connectedPlayers(room).map((p) => p.avatar?.color));
-    if (usedColors.size >= AVATAR_COLORS.length) {
-      return { ok: false, error: "This room is full (all character colors are in use)." };
+    if (this.connectedPlayers(room).length >= MAX_PLAYERS) {
+      return { ok: false, error: `This room is full (${MAX_PLAYERS} players max).` };
     }
     room.players[socketId] = this.makePlayer(socketId, check.name, uniqueAvatar(room, avatar));
     room.lastActivity = Date.now();
@@ -422,6 +431,7 @@ module.exports = {
   ALLOWED_BATTLE_TARGETS,
   AVATAR_EMOJIS,
   AVATAR_COLORS,
+  MAX_PLAYERS,
   validateAvatar,
   uniqueAvatar,
   defaultSettings,
