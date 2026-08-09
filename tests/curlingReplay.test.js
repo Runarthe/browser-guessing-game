@@ -70,6 +70,47 @@ test("curling: each shot gets a distinct trajectory id", () => {
   done();
 });
 
+test("curling: a stone leaving the board always appears as off in the trajectory", () => {
+  // Frames are sampled every third simulation step, and a stone going out
+  // freezes it so the loop breaks. If the break landed on a step that was not
+  // a multiple of three, the `off` flag was never sampled — the client played
+  // no stone-off sound and kept drawing the stone. It only bit when you shot
+  // your own stone straight out, since knocking someone else's out leaves
+  // other stones moving and the loop runs on.
+  const { gm, room, done } = harness();
+  let checked = 0;
+
+  for (let i = 0; i < 24; i++) {
+    room.curlingStones = [];                 // nothing else moving: worst case
+    const id = `solo:${i}`;
+    const frames = gm.simulateCurlingShot(room, "s1", id, { direction: 0.9, power: 0.6 + i * 0.015 });
+    const settled = room.curlingStones.find((s) => s.stoneId === id);
+    if (!settled || !settled.off) continue;  // this shot stayed on the board
+    checked++;
+    assert.ok(frames.some((f) => f.some((s) => s.stoneId === id && s.off)),
+      `shot ${i} ended off the board, so the trajectory must show it`);
+  }
+
+  assert.ok(checked > 0, "the sample produced at least one stone going out");
+  done();
+});
+
+test("curling: the final frame matches the settled stone positions", () => {
+  // The animation ends on the same state the scoring uses, so stones cannot
+  // visibly jump when the trajectory hands over to the resting positions.
+  const { gm, room, done } = harness();
+  const frames = gm.simulateCurlingShot(room, "s1", "final:1", { direction: 0.2, power: 0.8 });
+  const last = frames[frames.length - 1];
+  for (const settled of room.curlingStones) {
+    const drawn = last.find((s) => s.stoneId === settled.stoneId);
+    assert.ok(drawn, `${settled.stoneId} present in the final frame`);
+    assert.equal(drawn.off, settled.off, `${settled.stoneId} off-state matches`);
+    assert.ok(Math.abs(drawn.x - settled.x) < 0.001 && Math.abs(drawn.y - settled.y) < 0.001,
+      `${settled.stoneId} rests where the final frame drew it`);
+  }
+  done();
+});
+
 test("curling: shot ids reset with a new round", () => {
   const { gm, room, done } = harness();
   gm.submitGuess(room, room.turnOrder[0], { direction: 0.1, power: 0.6 });

@@ -776,6 +776,15 @@ class GameManager {
       if(step%3===0)frames.push(bodies.map(({playerId,stoneId,x,y,off})=>({playerId,stoneId,x,y,off})));
       if(!moving&&step>10)break;
     }
+    // Always record the settled state as a final frame. Frames are sampled
+    // every third step, and a stone leaving the board freezes it — so if that
+    // happened on a step that was not a multiple of three, the loop broke
+    // before the `off` flag was ever sampled. The client then never saw the
+    // stone go out: no stone-off sound, and it stayed drawn until the
+    // animation ended. It only showed up when you shot your own stone
+    // straight out, because knocking someone else's out leaves other stones
+    // moving, which keeps the loop running long enough to sample it.
+    frames.push(bodies.map(({playerId,stoneId,x,y,off})=>({playerId,stoneId,x,y,off})));
     room.curlingStones=bodies.map(({playerId,stoneId,x,y,off})=>({playerId,stoneId,x,y,off}));
     room.curlingCollisionFrames=collisionFrames;
     return frames;
