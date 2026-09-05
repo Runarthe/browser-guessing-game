@@ -1,14 +1,15 @@
 "use strict";
 
 const path = require("path");
+const os = require("os");
 const http = require("http");
 const express = require("express");
 const { Server } = require("socket.io");
 
 const {
   RoomManager, GAME_STATES, GAME_MODES,
-  ALLOWED_ROUNDS, ALLOWED_SECONDS, ALLOWED_TARGETS,
-  AVATAR_EMOJIS, AVATAR_COLORS
+  ALLOWED_ROUNDS, ALLOWED_SECONDS, ALLOWED_TARGETS, ALLOWED_BATTLE_TARGETS,
+  AVATAR_EMOJIS, AVATAR_COLORS, uniqueAvatar
 } = require("./src/roomManager");
 const { GameManager } = require("./src/gameManager");
 const { categoriesForMode } = require("./src/questionManager");
@@ -23,6 +24,14 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
+// Client assets. In the packaged build these live inside `app.asar`, except
+// `public/audio` which is unpacked (see `asarUnpack`) so the browser's range
+// requests for music stream off real files. Electron's fs shim transparently
+// redirects the unpacked paths, so a single static root serves both.
+//
+// Note `src/gameManager.js` requires `../public/vanishMaps.js` — server and
+// client share that module, which is why `public` as a whole stays in the asar.
+//
 // This project is iterated on locally. Disable stale asset caching so every
 // reload receives the renderer that matches the currently running server.
 app.use(express.static(path.join(__dirname, "public"), {
@@ -53,7 +62,9 @@ function roomView(room) {
     settings: room.settings,
     currentMode: room.currentMode ?? null,
     arcade: room.arcade
-      ? { legIndex: room.arcade.legIndex, totalLegs: room.arcade.playlist.length, playlist: room.arcade.playlist }
+      ? { legIndex: room.arcade.legIndex, playlist: room.arcade.playlist, battle: !!room.arcade.battle,
+          target: room.arcade.target, wins: room.arcade.wins, spinnerId: room.arcade.spinnerId,
+          awaitingSpin: !!room.arcade.awaitingSpin, pendingMode: room.arcade.pendingMode }
       : null,
     players: Object.values(room.players).map((p) => ({
       id: p.id,
@@ -70,9 +81,12 @@ function roomView(room) {
 // Static metadata the client needs to render the settings + character UI.
 const GAME_META = {
   modes: GAME_MODES,
+  readyModes: ["curling", "golf", "platformer", "pushy", "hidebomb", "colorfloor", "vanish", "fire", "racing", "flappy", "runner", "painter", "pong", "drawing", "trivia", "timeline", "map", "bomb"],
+  wipModes: ["bombpass", "redlight", "doors"],
   rounds: ALLOWED_ROUNDS,
   seconds: ALLOWED_SECONDS,
   targets: ALLOWED_TARGETS,
+  battleTargets: ALLOWED_BATTLE_TARGETS,
   avatarEmojis: AVATAR_EMOJIS,
   avatarColors: AVATAR_COLORS,
   categoriesByMode: Object.fromEntries(
@@ -88,7 +102,7 @@ function addTestBots(room) {
     ["bot:bean", "Bean", { emoji: AVATAR_EMOJIS[9], color: AVATAR_COLORS[6] }]
   ];
   for (const [id, name, avatar] of bots) {
-    room.players[id] = roomManager.makePlayer(id, name, avatar);
+    room.players[id] = roomManager.makePlayer(id, name, uniqueAvatar(room, avatar));
     room.players[id].isBot = true;
   }
   room.testMode = true;
@@ -118,27 +132,51 @@ function startTestBots(room) {
       gameManager.submitGuess(current, activeId, Math.round(Math.random() * 1000));
       return;
     }
+    if(mode==="golf"&&current.players[activeId]?.isBot&&Date.now()>=(current.golf?.playbackUntil||0)){
+      gameManager.submitGuess(current,activeId,{direction:(Math.random()-.5)*.7,power:.45+Math.random()*.45});
+      return;
+    }
     for (const bot of bots) {
       if (["trivia", "map"].includes(mode) && bot.guess === null) {
         if (mode === "map") gameManager.submitGuess(current, bot.id, {
           lat: -70 + Math.random() * 140, lng: -170 + Math.random() * 340
         });
         else gameManager.submitGuess(current, bot.id, Math.round(Math.random() * 1000));
-      } else if (mode === "doors" && !current.doors?.eliminated[bot.id] &&
-                 !Number.isInteger(current.doors?.choices[bot.id])) {
+      } else if (mode === "doors" && !current.doors?.eliminated[bot.id]) {
         const d=current.doors,pos=d.positions[bot.id];
-        d.botTargets[bot.id] ??= Math.floor(Math.random()*4);
-        const targetX=d.botTargets[bot.id]*180+90;
+        if(!pos)continue;
+        d.botTargets[bot.id] ??= Math.floor(Math.random()*3);
+        const choice=d.choices[bot.id],stage=d.stageByPlayer[bot.id]||0,split=1050-stage*1050,route=Number.isInteger(choice)?(d.routeSets[stage]||d.routeSets.at(-1))[choice]:null;
+        let targetX=190+d.botTargets[bot.id]*170;
+        if(Number.isInteger(choice)){
+          const left=113+choice*170,right=267+choice*170;
+          targetX=(left+right)/2;
+          if(route==="small"&&pos.y<split-360&&pos.y>split-550)targetX=left+30;
+          if(route==="big"&&pos.y<split-230&&pos.y>split-410)targetX=left+28;
+          else if(route==="big"&&pos.y<=split-410&&pos.y>split-730)targetX=right-28;
+        }
+        const runSpeed=d.runSpeed||182;
         gameManager.doorsPosition(current,bot.id,{
-          x:pos.x+Math.sign(targetX-pos.x)*Math.min(10,Math.abs(targetX-pos.x)),
-          y:pos.y-7
+          x:pos.x+Math.sign(targetX-pos.x)*Math.min(34,Math.abs(targetX-pos.x)),
+          y:pos.y-runSpeed*.1
         });
-      } else if (["colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "pong"].includes(mode) &&
+      } else if (["colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "runner", "painter", "pong"].includes(mode) &&
                  !current.arena?.eliminated[bot.id]) {
         const pos = current.arena?.positions[bot.id];
         if (pos) {
           if(mode==="flappy"){
             if(pos.y>235||(pos.vy||0)>150&&Math.random()<.35)gameManager.arenaJump(current,bot.id);
+            continue;
+          }
+          if(mode==="runner"){
+            const next=current.arena.obstacles.find((item)=>item.x-(pos.distance||0)>135);
+            const gap=next?next.x-(pos.distance||0)-135:999;
+            if(next?.type==="hanging"){
+              gameManager.arenaPosition(current,bot.id,{x:0,y:0,roll:gap<75});
+            }else{
+              gameManager.arenaPosition(current,bot.id,{x:0,y:0,roll:false});
+              if(gap<68&&pos.y>=324)gameManager.arenaJump(current,bot.id);
+            }
             continue;
           }
           if(mode==="pong"){
@@ -158,12 +196,15 @@ function startTestBots(room) {
           if(mode==="racing"){
             const tracks={
               square:[[590,90],[640,140],[640,320],[590,370],[130,370],[80,320],[80,140],[130,90]],
-              swing:[[310,70],[520,105],[630,190],[540,260],[630,350],[390,375],[250,310],[90,350],[120,220],[260,205],[110,100]]
+              swing:[[310,70],[520,105],[630,190],[540,260],[630,350],[390,375],[250,310],[90,350],[120,220],[260,205],[110,100]],
+              harbor:[[315,72],[565,96],[642,165],[570,225],[640,310],[535,378],[270,365],[82,305],[148,220],[78,150],[105,105]],
+              oval:[[465,78],[555,105],[620,150],[650,220],[620,290],[555,335],[465,362],[360,370],[255,362],[165,335],[100,290],[70,220],[100,150],[165,105],[255,78],[360,70]]
             };
             const waypoints=tracks[current.arena.trackId]||tracks.square;
             current.arena.botRace ||= {};const ri=current.arena.botRace[bot.id]||0,target=waypoints[ri];
             const dx=target[0]-pos.x,dy=target[1]-pos.y,d=Math.max(1,Math.hypot(dx,dy));
-            gameManager.arenaPosition(current,bot.id,{x:pos.x+dx/d*18,y:pos.y+dy/d*18,angle:Math.atan2(dy,dx)});
+            const step=(current.arena.raceMaxSpeed||255)*.1;
+            gameManager.arenaPosition(current,bot.id,{x:pos.x+dx/d*step,y:pos.y+dy/d*step,angle:Math.atan2(dy,dx)});
             if(d<35)current.arena.botRace[bot.id]=(ri+1)%waypoints.length;
             continue;
           }
@@ -299,6 +340,14 @@ io.on("connection", (socket) => {
     broadcastRoom(room);
   });
 
+  socket.on("player:avatar", ({ avatar } = {}) => {
+    const room = roomManager.getRoom(socket.data.roomCode);
+    const result = roomManager.updateAvatar(room, socket.id, avatar);
+    if (!result.ok) return socket.emit("room:error", { message: result.error });
+    socket.emit("player:avatar:accepted", result);
+    broadcastRoom(room);
+  });
+
   // Reconnect an existing player after a page refresh, using their token.
   socket.on("room:rejoin", ({ roomCode, token } = {}) => {
     const result = roomManager.rejoinRoom(socket.id, roomCode, token);
@@ -320,8 +369,21 @@ io.on("connection", (socket) => {
     broadcastRoom(room);
   });
 
+  socket.on("room:sync", () => {
+    const room = roomManager.getRoom(socket.data.roomCode);
+    const player = room?.players?.[socket.id];
+    if (!room || !player) return;
+    socket.emit("room:resumed", {
+      room: roomView(room), youAreHost: room.hostId === socket.id,
+      selfId: socket.id, token: player.token, meta: GAME_META,
+      resume: gameManager.buildResume(room, socket.id)
+    });
+  });
+
   socket.on("room:leave", () => {
-    leaveCurrentRoom(socket);
+    // Pressing Leave is intentional, so give up the seat immediately rather
+    // than holding it through the disconnect grace period.
+    leaveCurrentRoom(socket, { explicit: true });
   });
 
   socket.on("game:start", () => {
@@ -429,6 +491,12 @@ io.on("connection", (socket) => {
     if (!result.ok) socket.emit("room:error", { message: result.error });
   });
 
+  socket.on("platformer:crumble", ({ key } = {}) => {
+    const room=roomManager.getRoom(socket.data.roomCode);
+    const result=gameManager.platformerCrumble(room,socket.id,key);
+    if(!result.ok)socket.emit("room:error",{message:result.error});
+  });
+
   socket.on("drawing:clear", () => {
     const room = roomManager.getRoom(socket.data.roomCode);
     const result = gameManager.drawingClear(room, socket.id);
@@ -455,18 +523,21 @@ io.on("connection", (socket) => {
 
   socket.on("arena:position", (position = {}) => {
     const room = roomManager.getRoom(socket.data.roomCode);
+    if (!room?.arena || position.instanceId !== room.arena.instanceId) return;
     const result = gameManager.arenaPosition(room, socket.id, position);
     if (!result.ok) socket.emit("room:error", { message: result.error });
   });
 
-  socket.on("arena:jump", () => {
+  socket.on("arena:jump", ({ instanceId } = {}) => {
     const room = roomManager.getRoom(socket.data.roomCode);
+    if (!room?.arena || instanceId !== room.arena.instanceId) return;
     const result = gameManager.arenaAction(room, socket.id);
     if (!result.ok) socket.emit("room:error", { message: result.error });
   });
 
-  socket.on("arena:crash", () => {
+  socket.on("arena:crash", ({ instanceId } = {}) => {
     const room = roomManager.getRoom(socket.data.roomCode);
+    if (!room?.arena || instanceId !== room.arena.instanceId) return;
     const result = gameManager.arenaCrash(room, socket.id);
     if (!result.ok) socket.emit("room:error", { message: result.error });
   });
@@ -528,9 +599,33 @@ io.on("connection", (socket) => {
     broadcastRoom(room);
   });
 
+  socket.on("battle:spin", () => {
+    const room = roomManager.getRoom(socket.data.roomCode);
+    const result = gameManager.spinBattleWheel(room, socket.id);
+    if (!result.ok) socket.emit("room:error", { message: result.error });
+    else broadcastRoom(room);
+  });
+
+  socket.on("battle:ceremony-proceed", () => {
+    const room = roomManager.getRoom(socket.data.roomCode);
+    const result = gameManager.proceedBattleCeremony(room, socket.id);
+    if (!result.ok) socket.emit("room:error", { message: result.error });
+    else broadcastRoom(room);
+  });
+
   socket.on("game:restart", () => {
     const room = roomManager.getRoom(socket.data.roomCode);
     const result = gameManager.restartGame(room, socket.id);
+    if (!result.ok) {
+      socket.emit("room:error", { message: result.error });
+      return;
+    }
+    broadcastRoom(room);
+  });
+
+  socket.on("game:rematch", () => {
+    const room = roomManager.getRoom(socket.data.roomCode);
+    const result = gameManager.rematchGame(room, socket.id);
     if (!result.ok) {
       socket.emit("room:error", { message: result.error });
       return;
@@ -542,18 +637,31 @@ io.on("connection", (socket) => {
     leaveCurrentRoom(socket);
   });
 
-  function leaveCurrentRoom(sock) {
+  function leaveCurrentRoom(sock, { explicit = false } = {}) {
     const code = sock.data.roomCode;
     if (!code) return;
     const room = roomManager.getRoom(code);
     const wasInGame = room && room.state !== GAME_STATES.LOBBY;
 
-    const { room: updated, hostChanged, deleted } = roomManager.removePlayer(
+    const { room: updated, hostChanged, deleted, empty } = roomManager.removePlayer(
       sock.id,
-      code
+      code,
+      { explicit }
     );
     sock.leave(code);
     sock.data.roomCode = null;
+
+    if (empty) {
+      // Nobody is connected, but the room is held briefly so people can return.
+      // Round timers deliberately keep running: freezing them would leave a
+      // rejoining player staring at a round whose deadline has already passed
+      // and which nothing will ever resolve. Emitting into an empty room is
+      // harmless, and the game simply advances as it would have.
+      // The bot loop does stop — there is nobody for bots to play against.
+      const idleBots = testBotLoops.get(code);
+      if (idleBots) { clearInterval(idleBots); testBotLoops.delete(code); }
+      return;
+    }
 
     if (deleted || !updated) {
       // Room gone; if it was mid-game, stop its timer.
@@ -575,15 +683,115 @@ io.on("connection", (socket) => {
 
 // Periodically clean up inactive rooms (~1 hour TTL).
 setInterval(() => {
-  const removed = roomManager.cleanupInactiveRooms();
+  const { removed, changed } = roomManager.cleanupInactiveRooms();
   if (removed > 0) {
     console.log(`Cleaned up ${removed} inactive room(s).`);
   }
-}, 5 * 60 * 1000).unref();
+  // Seats released by the sweep have to be reflected for everyone still in the
+  // lobby, otherwise a ghost player lingers on their screens.
+  for (const code of changed) {
+    const room = roomManager.getRoom(code);
+    if (room) io.to(code).emit("room:updated", roomView(room));
+  }
+// Runs often because it now governs grace periods, not just a one-hour TTL.
+}, 20 * 1000).unref();
 
-server.listen(PORT, () => {
-  console.log(`Closest Wins running at http://localhost:${PORT}`);
-  console.log(`Minimum players to start: ${MIN_PLAYERS} · Round length: ${ROUND_SECONDS}s`);
-});
+// Picking "the" local address is guesswork on a machine with VPNs and
+// hypervisors, so rank candidates instead of taking the first one. Getting this
+// wrong is silent and confusing: the app happily shows an address that a guest's
+// phone simply cannot route to.
+const VIRTUAL_IF = /tailscale|zerotier|vmware|virtualbox|vbox|docker|hyper-?v|vethernet|wsl|loopback|bluetooth|utun|tun\d|tap\d|nordlynx|wireguard|openvpn|proton|radmin/i;
+const PHYSICAL_IF = /wi-?fi|wlan|wireless|ethernet|^lan\b|^en\d|^eth\d/i;
 
-module.exports = { app, server, io, roomManager, gameManager };
+function rankAddress(name, address) {
+  let score = 0;
+  if (/^192\.168\./.test(address)) score += 100;                       // home wifi
+  else if (/^10\./.test(address)) score += 90;                         // office / larger LAN
+  else if (/^172\.(1[6-9]|2\d|3[01])\./.test(address)) score += 80;    // private range
+  else if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(address)) score -= 60; // CGNAT (Tailscale)
+  else if (/^169\.254\./.test(address)) score -= 120;                  // link-local, never useful
+  if (PHYSICAL_IF.test(name)) score += 25;
+  if (VIRTUAL_IF.test(name)) score -= 80;
+  return score;
+}
+
+/** All reachable IPv4 addresses, best guess for "same wifi" first. */
+function lanCandidates() {
+  const found = [];
+  for (const [name, list] of Object.entries(os.networkInterfaces())) {
+    for (const net of list || []) {
+      if (net.family !== "IPv4" || net.internal) continue;
+      found.push({ name, address: net.address, score: rankAddress(name, net.address) });
+    }
+  }
+  return found.sort((a, b) => b.score - a.score || a.address.localeCompare(b.address));
+}
+
+/** Single best address for phones on the same wifi, or null if there is none. */
+function lanAddress() {
+  const best = lanCandidates()[0];
+  return best ? best.address : null;
+}
+
+/**
+ * Begin listening and resolve with the details a host UI needs.
+ * Pass `port: 0` to let the OS assign a free port — the desktop build does this
+ * because 3000 is frequently already taken on a player's machine.
+ */
+function start({ port = PORT, host } = {}) {
+  return new Promise((resolve, reject) => {
+    const onError = (err) => reject(err);
+    server.once("error", onError);
+    // Deliberately omit the host when not given. Node then binds dual-stack
+    // (IPv6 `::` with IPv4 mapped in), which is what plain `listen(PORT)` did.
+    // Binding "0.0.0.0" is IPv4-only, and on Windows `localhost` resolves to
+    // ::1 first — so an IPv4-only bind makes http://localhost unreachable.
+    // Dual-stack still accepts LAN connections, so phones are unaffected.
+    const args = host ? [port, host] : [port];
+    server.listen(...args, () => {
+      server.removeListener("error", onError);
+      const actualPort = server.address().port;
+      const candidates = lanCandidates();
+      resolve({
+        port: actualPort,
+        localUrl: `http://localhost:${actualPort}`,
+        lanUrl: candidates[0] ? `http://${candidates[0].address}:${actualPort}` : null,
+        // Every candidate, best first — the host UI offers these as fallbacks
+        // when the top guess turns out to be a VPN or virtual adapter.
+        lanUrls: candidates.map((c) => ({
+          url: `http://${c.address}:${actualPort}`, name: c.name, address: c.address
+        })),
+        minPlayers: MIN_PLAYERS,
+        roundSeconds: ROUND_SECONDS
+      });
+    });
+  });
+}
+
+/** Close the socket layer and HTTP server (used on desktop app quit). */
+function stop() {
+  return new Promise((resolve) => {
+    io.close(() => server.close(() => resolve()));
+  });
+}
+
+// Only self-start when run directly (`npm start`). When the desktop build
+// requires this file, it calls start() itself so it can choose the port.
+if (require.main === module) {
+  start().then((info) => {
+    console.log(`Confetti running at ${info.localUrl}`);
+    if (info.lanUrl) console.log(`On this network: ${info.lanUrl}`);
+    for (const alt of info.lanUrls.slice(1)) {
+      console.log(`     (or, via ${alt.name}: ${alt.url})`);
+    }
+    console.log(`Minimum players to start: ${info.minPlayers} · Round length: ${info.roundSeconds}s`);
+  }).catch((err) => {
+    console.error(`Failed to start on port ${PORT}:`, err.message);
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  app, server, io, roomManager, gameManager,
+  start, stop, lanAddress, lanCandidates, rankAddress
+};

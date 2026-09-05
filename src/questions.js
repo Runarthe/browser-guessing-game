@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * Question bank for Closest Wins.
+ * Question bank for Confetti.
  *
  * Each question is stored with its answer server-side. The correct answer must
  * NEVER be sent to clients during the question stage — use toPublicQuestion()

@@ -1,4 +1,9 @@
-# Closest Wins
+# Confetti
+
+> Current release status and priorities: [docs/ROADMAP.md](docs/ROADMAP.md).
+> Steam PC online play is required before launch (App ID 5229250), but is not yet
+> implemented. The game currently has 18 friend-test-ready modes and 3 WIP modes.
+> Older gameplay descriptions below are historical and are being reconciled.
 
 A browser-based multiplayer party game. Players join a private room with a short
 code, then compete over five rounds of numerical trivia. Each round, everyone
@@ -41,14 +46,14 @@ The host picks a mode in the lobby before starting:
   touch controls responsive.
 - **🎨 Drawing** — one player draws a secret word on the shared canvas while
   everyone else guesses; correct guesses reward both the guesser and artist.
-- **🐧 Pushy** — all players move together on one shared icy platform while
+- **🐧 Penguin Menace** — all players move together on one shared icy platform while
   increasingly dense left-to-right penguin crowds try to shove them into the
   water.
 - **🚦 Red Light, Green Light** — one player controls the real light and can
   throw harmless red-light feints while everyone else holds to run and must
   release before a genuine red light. A recharging battery prevents the
   controller from leaving red on indefinitely.
-- **💣 Hide and Go BOOM!** — the team gets ten seconds to choose one of four
+- **💣 Cannon Caper** — the team gets ten seconds to choose one of four
   cannons, then stays hidden while the rotating solo player lights three
   different fuses. The solo player is blindfolded during hiding, and every
   choice has a synchronized fuse-burning suspense animation before the reveal.
@@ -167,12 +172,12 @@ closest-wins/
 Run `npm test` — 76 tests across scoring, rooms, reconnect, settings, avatars, the
 arcade playlist and all ten game modes.
 
-### Roadmap
+### Historical roadmap (superseded by docs/ROADMAP.md)
 
 Built: Arcade playlist ✅, Map "Place it" ✅, Leave button + confirm dialogs ✅,
 Timeline team-voting ✅, character reaction sounds ✅, Build & Race platformer ✅,
-Drawing ✅, Pushy platform survival ✅, Red Light Green Light ✅,
-Hide and Go BOOM! ✅.
+Drawing ✅, Penguin Menace ✅, Red Light Green Light ✅,
+Cannon Caper ✅.
 
 Systems & minigame ideas queued:
 
@@ -200,7 +205,7 @@ Systems & minigame ideas queued:
   player passes the bomb and briefly protects the recipient from an immediate
   pass-back. Movement speed and warning effects increase as the fuse gets close
   to exploding; the holder is eliminated when it detonates.
-- **Choose a Door** — players get a few seconds to commit to one of several doors
+- **Fire Escape** — outrun rising flames and commit to one of three hidden routes
   across three consecutive selections. Doors can be safe, eliminate a player,
   deal persistent damage, or apply inconveniences such as reversed controls,
   slower movement, obscured choices, or a shorter decision timer. Surviving all
@@ -263,8 +268,11 @@ simultaneous `round:question` / `round:progress` pair.
 ## Known limitations
 
 - Rooms live in memory only, so a server restart drops all active games.
-- Reconnect relies on `sessionStorage`, so it works across a refresh or brief
-  disconnect but not after the browser tab is closed.
+  Disconnects are handled (see below), but a restart is not.
+- Reconnect uses `localStorage` with a 12-hour expiry, so it survives a refresh,
+  a closed tab, and a phone evicting the page from memory. A dropped lobby seat
+  is held for 2 minutes and an emptied room for 5, so a screen lock or router
+  blip does not end the party. Pressing Leave gives the seat up immediately.
 - Question answers are approximate by nature — the game rewards closeness, not
   exactness.
 - Single Node process; no horizontal scaling.

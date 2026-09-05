@@ -3,3 +3,10 @@ npm-debug.log*
 .DS_Store
 *.log
 .env
+
+# Local safety copies of the working tree (not for version control)
+_safety-backup-*/
+
+# Electron / packaging output
+dist/
+release/

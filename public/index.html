@@ -4,13 +4,23 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#0f1226" />
-  <title>Closest Wins</title>
-  <link rel="stylesheet" href="styles.css?v=20260727-21" />
+  <title>Confetti: Pocket Party</title>
+  <link rel="stylesheet" href="styles.css?v=20260812-32" />
 </head>
-<body>
+  <body>
+    <div id="game-countdown" class="game-countdown hidden" aria-live="assertive">
+      <small id="game-countdown-name">GET READY</small><strong id="game-countdown-value">3</strong>
+    </div>
+    <div id="spin-announcement" class="spin-announcement hidden" aria-live="assertive">
+      <span>🎡</span><strong id="spin-announcement-text"></strong>
+    </div>
   <div id="banner" class="banner hidden" role="status"></div>
   <button id="leave-top-btn" class="leave-top-btn hidden" title="Leave the room">⨉ Leave</button>
   <button id="sound-btn" class="sound-btn" aria-label="Mute sound" title="Sound on/off">🔊</button>
+  <div class="music-control" title="Music volume">
+    <button id="music-btn" aria-label="Mute music">🎵</button>
+    <input id="music-volume" type="range" min="0" max="100" step="1" value="10" aria-label="Music volume" />
+  </div>
 
   <!-- Reusable confirmation dialog -->
   <div id="modal-overlay" class="modal-overlay hidden" role="dialog" aria-modal="true">
@@ -26,11 +36,43 @@
 
   <main id="app">
 
-    <!-- ===================== HOME ===================== -->
-    <section class="screen" id="screen-home">
+    <!-- ===================== START MENU ===================== -->
+    <section class="screen" id="screen-start">
       <div class="card hero">
-        <h1 class="logo">CLOSEST<span>WINS</span></h1>
-        <p class="tagline">Guess close. Score points.</p>
+        <h1 class="logo">CON<span>FETTI</span></h1>
+        <p class="logo-sub">POCKET PARTY</p>
+        <p class="tagline">Spin. Compete. Claim the crown.</p>
+
+        <div class="menu-list" id="start-menu">
+          <button id="menu-couch" class="btn btn-primary btn-block menu-item">
+            <span class="menu-item-title">🛋️ Couch party</span>
+            <span class="menu-item-sub">Everyone joins from their own phone, same wifi</span>
+          </button>
+          <button id="menu-online" class="btn btn-secondary btn-block menu-item" disabled aria-disabled="true">
+            <span class="menu-item-title">🌐 Online party with friends</span>
+            <span class="menu-item-sub">Coming soon</span>
+          </button>
+          <button id="menu-unlocks" class="btn btn-secondary btn-block menu-item">
+            <span class="menu-item-title">🏆 Unlockables &amp; stats</span>
+            <span class="menu-item-sub" id="menu-unlocks-sub">Track your progress</span>
+          </button>
+          <button id="menu-settings" class="btn btn-secondary btn-block menu-item">
+            <span class="menu-item-title">⚙️ Settings</span>
+            <span class="menu-item-sub">Audio and display</span>
+          </button>
+          <button id="menu-credits" class="btn btn-ghost btn-block">Credits</button>
+          <button id="menu-exit" class="btn btn-ghost btn-block hidden">Exit game</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== HOME (party setup) ===================== -->
+    <section class="screen hidden" id="screen-home">
+      <div class="card hero">
+        <button id="home-back" class="btn btn-ghost">← Back to menu</button>
+        <h1 class="logo">CON<span>FETTI</span></h1>
+        <p class="logo-sub">POCKET PARTY</p>
+        <p class="tagline">Spin. Compete. Claim the crown.</p>
 
         <label class="field-label" for="name-input">Your name</label>
         <input id="name-input" class="text-input" type="text" maxlength="20"
@@ -42,6 +84,17 @@
           <div class="creator-grids">
             <div class="emoji-grid" id="emoji-grid"></div>
             <div class="color-grid" id="color-grid"></div>
+          </div>
+        </div>
+
+        <div class="cosmetic-row">
+          <div class="cosmetic-field">
+            <label class="field-label" for="title-select">Title</label>
+            <select id="title-select" class="text-input"></select>
+          </div>
+          <div class="cosmetic-field">
+            <label class="field-label" for="frame-select">Frame</label>
+            <select id="frame-select" class="text-input"></select>
           </div>
         </div>
 
@@ -75,24 +128,41 @@
         <h3 class="section-title">Players</h3>
         <ul class="player-list" id="lobby-players"></ul>
 
+        <details class="lobby-character">
+          <summary>Change my character</summary>
+          <div class="creator lobby-creator">
+            <div class="char-preview" id="lobby-char-preview"></div>
+            <div class="creator-grids">
+              <div class="emoji-grid" id="lobby-emoji-grid"></div>
+              <div class="color-grid" id="lobby-color-grid"></div>
+            </div>
+          </div>
+          <p class="muted small" id="lobby-character-note">Each player must use a different color.</p>
+        </details>
+
         <h3 class="section-title">Game settings</h3>
         <div id="settings-panel" class="settings">
           <div class="setting">
-            <span class="setting-label">Arcade</span>
+            <span class="setting-label">Game format</span>
             <div class="seg" id="set-arcade"></div>
           </div>
-          <div class="setting hidden" id="set-mode-wrap">
-            <span class="setting-label">Mode</span>
+          <div class="setting setting-col hidden" id="set-mode-wrap">
+            <span class="setting-label">Choose a minigame</span>
             <div class="seg" id="set-mode"></div>
           </div>
           <p class="mode-desc muted small" id="mode-desc"></p>
           <div class="setting setting-col hidden" id="set-playlist-wrap">
-            <span class="setting-label">Playlist — tap to add in order</span>
+            <span class="setting-label">Minigame pool — selected games appear on the wheel</span>
             <div class="chips" id="set-playlist"></div>
             <p class="muted small" id="playlist-preview"></p>
+            <button id="playlist-recommend" class="btn btn-secondary hidden" type="button">✨ Recommend</button>
+          </div>
+          <div class="setting hidden" id="set-battle-target-wrap">
+            <span class="setting-label">First to this many minigame wins</span>
+            <div class="seg" id="set-battle-target"></div>
           </div>
           <div class="setting">
-            <span class="setting-label">Rounds</span>
+            <span class="setting-label">Rounds per minigame</span>
             <div class="seg" id="set-rounds"></div>
           </div>
           <div class="setting">
@@ -139,7 +209,11 @@
           <div id="guess-slider-wrap" class="guess-slider-wrap">
             <input id="guess-slider" class="guess-slider" type="range" min="0" max="10000" step="1" value="0"
                    aria-label="Choose your answer" />
-            <div class="guess-slider-labels"><span>0</span><strong id="guess-slider-value">0</strong><span id="guess-slider-max">1,000</span></div>
+            <div class="guess-slider-labels"><span id="guess-slider-min">0</span><strong id="guess-slider-value">0</strong><span id="guess-slider-max">1,000</span></div>
+            <div class="guess-nudges" aria-label="Fine tune your guess">
+              <button type="button" data-guess-nudge="-100">−100</button><button type="button" data-guess-nudge="-10">−10</button><button type="button" data-guess-nudge="-1">−1</button>
+              <button type="button" data-guess-nudge="1">+1</button><button type="button" data-guess-nudge="10">+10</button><button type="button" data-guess-nudge="100">+100</button>
+            </div>
           </div>
           <button id="submit-btn" class="btn btn-primary btn-block">Submit guess</button>
         </div>
@@ -168,16 +242,15 @@
         <div id="curling-area" class="hidden">
           <p class="category-chip" id="turn-category"></p>
           <h2 class="question-text" id="turn-question">…</h2>
-          <ul class="shot-list" id="shot-list"></ul>
+          <canvas id="curling-canvas" class="curling-canvas" width="560" height="762"></canvas>
+          <ul class="shot-list hidden" id="shot-list"></ul>
           <div id="curling-order" class="turn-order"></div>
           <div id="curling-input" class="hidden">
-            <label class="field-label" for="turn-guess">Your shot</label>
-            <div class="guess-row">
-              <input id="turn-guess" class="text-input guess-input" type="number"
-                     inputmode="decimal" autocomplete="off" placeholder="0" />
-              <span class="unit" id="turn-unit"></span>
-            </div>
-            <button id="turn-submit" class="btn btn-primary btn-block">Take your shot</button>
+            <input id="turn-guess" type="hidden" value="0" />
+            <span class="hidden" id="turn-unit"></span>
+            <p class="curling-meter-status" id="curling-meter-status">Press once to lock direction</p>
+            <span class="hidden" id="curling-power-value">0</span>
+            <button id="turn-submit" class="btn btn-primary btn-block">LOCK DIRECTION</button>
           </div>
           <p class="muted center" id="curling-wait"></p>
         </div>
@@ -185,7 +258,7 @@
         <!-- Balloon (formerly bomb) -->
         <div id="bomb-area" class="hidden">
           <div class="balloon-stage">
-            <canvas id="balloon-canvas" width="420" height="300"></canvas>
+            <canvas id="balloon-canvas" width="560" height="380"></canvas>
           </div>
           <p class="bomb-count muted center">Pumps so far: <strong id="bomb-total">0</strong></p>
           <div id="bomb-order" class="turn-order"></div>
@@ -284,7 +357,15 @@
         <p class="muted small center" id="drawing-clue"></p>
         <canvas id="drawing-canvas" class="drawing-canvas" width="720" height="500"></canvas>
         <div id="drawing-tools" class="drawing-tools hidden">
-          <input id="drawing-color" type="color" value="#111111" aria-label="Brush color">
+          <input id="drawing-color" type="hidden" value="#111111">
+          <div class="drawing-palette" aria-label="Brush color">
+            <button class="drawing-swatch on" data-drawing-color="#111111" style="--swatch:#111111" aria-label="Black"></button>
+            <button class="drawing-swatch" data-drawing-color="#ef4444" style="--swatch:#ef4444" aria-label="Red"></button>
+            <button class="drawing-swatch" data-drawing-color="#f59e0b" style="--swatch:#f59e0b" aria-label="Orange"></button>
+            <button class="drawing-swatch" data-drawing-color="#22c55e" style="--swatch:#22c55e" aria-label="Green"></button>
+            <button class="drawing-swatch" data-drawing-color="#3b82f6" style="--swatch:#3b82f6" aria-label="Blue"></button>
+            <button class="drawing-swatch" data-drawing-color="#a855f7" style="--swatch:#a855f7" aria-label="Purple"></button>
+          </div>
           <input id="drawing-width" type="range" min="2" max="24" value="6" aria-label="Brush width">
           <button id="drawing-clear" class="btn btn-secondary">Clear</button>
         </div>
@@ -356,6 +437,11 @@
           <p>The team is choosing their cannons.<br>Listen closely… but no peeking!</p>
         </div>
         <div id="hidebomb-board" class="hidebomb-board"></div>
+        <div id="hidebomb-controls" class="hidebomb-controls hidden">
+          <button id="hidebomb-left" class="btn btn-secondary" aria-label="Move left">◀</button>
+          <button id="hidebomb-action" class="btn btn-primary">HIDE HERE</button>
+          <button id="hidebomb-right" class="btn btn-secondary" aria-label="Move right">▶</button>
+        </div>
         <div id="hidebomb-players" class="hidebomb-players"></div>
         <p id="hidebomb-status" class="muted small center"></p>
       </div>
@@ -371,12 +457,19 @@
         <h2 class="question-text" id="arena-title">Survive!</h2>
         <p class="muted small center" id="arena-hint"></p>
         <canvas id="arena-canvas" class="arena-canvas" width="720" height="440"></canvas>
+        <div id="arena-painter-legend" class="painter-legend hidden"></div>
         <div class="platformer-controls" id="arena-controls">
+          <div id="arena-joystick" class="arena-joystick" aria-label="Movement joystick"><span></span></div>
+          <div id="race-mobile-pedals" class="race-mobile-pedals hidden">
+            <button class="race-pedal race-brake" data-race-pedal="down">BRAKE</button>
+            <button class="race-pedal race-gas" data-race-pedal="up">GAS</button>
+          </div>
           <button class="btn btn-secondary" data-arena="left">◀</button>
           <button class="btn btn-secondary" data-arena="up">▲</button>
           <button class="btn btn-secondary" data-arena="down">▼</button>
           <button class="btn btn-secondary" data-arena="right">▶</button>
           <button class="btn btn-primary arena-jump" id="arena-jump">JUMP</button>
+          <button class="btn btn-secondary arena-roll hidden" id="arena-roll">ROLL</button>
         </div>
         <p id="arena-status" class="muted small center"></p>
       </div>
@@ -385,16 +478,14 @@
     <section class="screen hidden" id="screen-doors">
       <div class="card game-card">
         <div class="round-bar">
-          <span id="doors-round">Round 1 · Door 1 of 3</span>
-          <span class="timer" id="doors-timer">8s</span>
+          <span id="doors-round">Round 1 · Fire Escape</span>
+          <span class="timer" id="doors-timer">RUN!</span>
         </div>
-        <h2 class="question-text" id="doors-title">Choose a door!</h2>
-        <p class="muted small center" id="doors-hint">Some are safe. Others hurt—or eliminate—you.</p>
+        <h2 class="question-text" id="doors-title">Run from the fire!</h2>
+        <p class="muted small center" id="doors-hint">You run automatically. Move left and right to choose a lane.</p>
         <canvas id="doors-canvas" class="arena-canvas doors-canvas" width="720" height="440"></canvas>
         <div class="platformer-controls" id="doors-controls">
           <button class="btn btn-secondary" data-door="left">◀</button>
-          <button class="btn btn-secondary" data-door="up">▲</button>
-          <button class="btn btn-secondary" data-door="down">▼</button>
           <button class="btn btn-secondary" data-door="right">▶</button>
         </div>
         <div id="doors-players" class="doors-players"></div>
@@ -411,6 +502,7 @@
         </div>
 
         <div id="results-timeline" class="timeline-viz hidden"></div>
+        <div id="round-award" class="round-award hidden"></div>
 
         <div class="map-wrap hidden" id="results-map-wrap">
           <svg id="results-map-svg" viewBox="0 0 1000 500" preserveAspectRatio="xMidYMid meet">
@@ -435,9 +527,24 @@
     <!-- ===================== INTERMISSION (arcade) ===================== -->
     <section class="screen hidden" id="screen-intermission">
       <div class="card center-card">
+        <div id="star-ceremony" class="star-ceremony hidden" aria-live="assertive">
+          <div class="star-burst">★</div>
+          <p>MINIGAME WINNER</p>
+          <div id="star-winner-avatar" class="star-winner-avatar"></div>
+          <h2 id="star-winner-name"></h2>
+          <div id="star-grants" class="star-grants"></div>
+          <button id="star-proceed-btn" class="btn btn-primary btn-block hidden">Proceed to wheel</button>
+          <small id="star-proceed-wait" class="muted hidden">Waiting for the host…</small>
+        </div>
         <p class="final-kicker" id="inter-kicker">GAME COMPLETE</p>
         <h2 class="announce" id="inter-next">Up next…</h2>
         <p class="muted small" id="inter-progress"></p>
+        <div id="battle-wheel-wrap" class="battle-wheel-wrap hidden">
+          <div class="wheel-pointer">▼</div>
+          <div id="battle-wheel" class="battle-wheel"><span id="battle-wheel-center" class="battle-wheel-center">SPIN</span></div>
+          <p id="battle-spinner-label" class="battle-spinner-label"></p>
+          <button id="battle-spin-btn" class="btn btn-primary btn-block hidden">Spin the wheel!</button>
+        </div>
         <ul class="result-list" id="inter-standings"></ul>
         <button id="inter-next-btn" class="btn btn-primary btn-block hidden">Start next game</button>
         <p class="muted small center" id="inter-host-note"></p>
@@ -448,6 +555,12 @@
     <section class="screen hidden" id="screen-final">
       <div class="card center-card">
         <div class="confetti" id="confetti" aria-hidden="true"></div>
+        <div id="battle-champion-hero" class="battle-champion-hero hidden" aria-live="assertive">
+          <div class="champion-rays"></div><div class="champion-crown">👑</div>
+          <div id="champion-avatar" class="champion-avatar"></div>
+          <p>ULTIMATE CONFETTI CHAMPION</p><h1 id="champion-name"></h1>
+          <div id="champion-fireworks" class="champion-fireworks"></div>
+        </div>
         <p class="final-kicker" id="final-kicker">FINAL RESULTS</p>
         <h2 class="announce" id="final-announce">…</h2>
 
@@ -458,7 +571,8 @@
         <ul class="result-list" id="final-list"></ul>
 
         <div class="final-actions">
-          <button id="playagain-btn" class="btn btn-primary hidden">Play again</button>
+          <button id="playagain-btn" class="btn btn-primary hidden">Play again now</button>
+          <button id="return-lobby-btn" class="btn btn-secondary hidden">Return to lobby</button>
           <button id="leave-btn" class="btn btn-secondary">Leave room</button>
         </div>
         <p class="muted small center" id="final-host-note"></p>
@@ -469,9 +583,15 @@
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="world.js?v=20260726-13"></script>
-  <script src="characters.js?v=20260725-15"></script>
+  <script src="characters.js?v=20260905-01"></script>
   <script src="arena25d.js?v=20260725-15"></script>
   <script src="vanishMaps.js?v=20260727-45"></script>
-  <script src="app.js?v=20260730-58"></script>
+  <script src="progression.js?v=20260812-03"></script>
+  <script src="modeInfo.js?v=20260905-01"></script>
+  <script src="playerProgress.js?v=20260808-03"></script>
+  <script src="app.js?v=20260905-01"></script>
+  <script src="qrLite.js?v=20260808-02"></script>
+  <script src="desktopHost.js?v=20260808-02"></script>
+  <script src="menu.js?v=20260812-01"></script>
 </body>
 </html>

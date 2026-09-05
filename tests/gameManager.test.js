@@ -18,7 +18,8 @@ function setup(minPlayers = 2) {
     // Manual timer: capture the callback instead of using real time.
     setTimer: (fn) => { timers.push(fn); return timers.length - 1; },
     clearTimer: () => {},
-    roundDurationMs: 30000
+    roundDurationMs: 30000,
+    roundCountdownMs: 0
   });
   const last = (event) => [...emitted].reverse().find((e) => e.event === event);
   return { rm, gm, emitted, timers, last };
@@ -31,6 +32,30 @@ test("prevents non-hosts from starting", () => {
   const res = gm.startGame(room, "guest");
   assert.equal(res.ok, false);
   assert.match(res.error, /host/i);
+});
+
+test("shows a three-second countdown before the next round", () => {
+  const rm = new RoomManager(), emitted = [], timers = [];
+  const gm = new GameManager(rm, {
+    emitRoom: (code, event, payload) => emitted.push({ code, event, payload }),
+    setTimer: (fn, ms) => { timers.push({ fn, ms }); return timers.length - 1; },
+    clearTimer: () => {}, roundCountdownMs: 3000
+  });
+  const { room } = rm.createRoom("host", "Runar");
+  rm.joinRoom("guest", room.code, "Anna");
+  gm.startGame(room, "host");
+  gm.submitGuess(room, "host", room.currentQuestion.answer);
+  gm.submitGuess(room, "guest", room.currentQuestion.answer + 1);
+
+  assert.equal(gm.nextRound(room, "host").ok, true);
+  assert.equal(room.state, GAME_STATES.RESULTS);
+  assert.equal(room.roundIndex, 0);
+  const countdown = emitted.findLast((e) => e.event === "round:countdown");
+  assert.equal(countdown.payload.roundNumber, 2);
+  assert.equal(timers.at(-1).ms, 3000);
+  timers.at(-1).fn();
+  assert.equal(room.state, GAME_STATES.QUESTION);
+  assert.equal(room.roundIndex, 1);
 });
 
 test("prevents starting with too few players", () => {
@@ -152,6 +177,27 @@ test("advances through five rounds and identifies final winner", () => {
   assert.equal(finished.payload.winner.score, 500); // 100 * 5 rounds
 });
 
+test("single-round standalone game reaches final results with one advance", () => {
+  const { rm, gm, emitted } = setup();
+  const { room } = rm.createRoom("host", "Runar");
+  rm.joinRoom("guest", room.code, "Anna");
+  room.settings.rounds = 1;
+  gm.startGame(room, "host");
+
+  gm.submitGuess(room, "host", room.currentQuestion.answer);
+  gm.submitGuess(room, "guest", room.currentQuestion.answer + 1000);
+  assert.equal(room.state, GAME_STATES.RESULTS);
+
+  const advance = gm.nextRound(room, "host");
+  assert.equal(advance.ok, true);
+  assert.equal(room.state, GAME_STATES.FINISHED);
+  assert.equal(emitted.filter((entry) => entry.event === "game:finished").length, 1);
+
+  const repeated = gm.nextRound(room, "host");
+  assert.equal(repeated.ok, false);
+  assert.equal(emitted.filter((entry) => entry.event === "game:finished").length, 1);
+});
+
 test("non-host cannot advance the round", () => {
   const { rm, gm } = setup();
   const { room } = rm.createRoom("host", "Runar");
@@ -176,4 +222,24 @@ test("restart returns the room to a fresh lobby", () => {
   assert.equal(room.roundIndex, 0);
   assert.equal(room.players["host"].score, 0);
   assert.equal(room.players["guest"].guess, null);
+});
+
+test("rematch starts a fresh game with the same lobby and settings", () => {
+  const { rm, gm } = setup();
+  const { room } = rm.createRoom("host", "Runar");
+  rm.joinRoom("guest", room.code, "Anna");
+  room.settings.rounds = 1;
+  gm.startGame(room, "host");
+  gm.submitGuess(room, "host", room.currentQuestion.answer);
+  gm.submitGuess(room, "guest", room.currentQuestion.answer + 10);
+  gm.nextRound(room, "host");
+
+  assert.equal(room.state, GAME_STATES.FINISHED);
+  const players = Object.keys(room.players);
+  const settings = { ...room.settings };
+  assert.equal(gm.rematchGame(room, "host").ok, true);
+  assert.equal(room.state, GAME_STATES.QUESTION);
+  assert.deepEqual(Object.keys(room.players), players);
+  assert.deepEqual(room.settings, settings);
+  assert.equal(room.players.host.score, 0);
 });

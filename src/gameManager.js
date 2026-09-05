@@ -25,13 +25,26 @@ const BOMB_SURVIVOR_POINTS = 50;
 const RACE_TRACKS = [
   {
     id:"square",
+    width:92,
     points:[[130,90],[590,90],[640,140],[640,320],[590,370],[130,370],[80,320],[80,140]],
-    checkpoints:[[640,140],[590,370],[80,320],[130,90]]
+    checkpoints:[[640,230],[360,370],[80,230],[360,90]]
   },
   {
     id:"swing",
+    width:82,
     points:[[110,100],[310,70],[520,105],[630,190],[540,260],[630,350],[390,375],[250,310],[90,350],[120,220],[260,205]],
-    checkpoints:[[630,190],[630,350],[250,310],[120,220],[110,100]]
+    checkpoints:[[575,148],[585,305],[320,343],[105,285],[210,85]]
+  },
+  {
+    id:"harbor",
+    width:78,
+    points:[[105,105],[315,72],[565,96],[642,165],[570,225],[640,310],[535,378],[270,365],[82,305],[148,220],[78,150]],
+    checkpoints:[[611,138],[605,337],[285,369],[105,270],[225,86]]
+  },
+  {
+    id:"oval",width:84,
+    points:[[360,70],[465,78],[555,105],[620,150],[650,220],[620,290],[555,335],[465,362],[360,370],[255,362],[165,335],[100,290],[70,220],[100,150],[165,105],[255,78]],
+    checkpoints:[[635,185],[570,325],[360,370],[150,325],[85,185],[360,70]]
   }
 ];
 
@@ -39,6 +52,22 @@ function distanceToSegment(px,py,x1,y1,x2,y2){
   const dx=x2-x1,dy=y2-y1,length=dx*dx+dy*dy;
   const t=length?Math.max(0,Math.min(1,((px-x1)*dx+(py-y1)*dy)/length)):0;
   return Math.hypot(px-(x1+t*dx),py-(y1+t*dy));
+}
+function raceGateNormal(track,gate){
+  let best={distance:Infinity,nx:0,ny:1,x:gate[0],y:gate[1]};
+  for(let i=0;i<track.points.length;i++){
+    const a=track.points[i],b=track.points[(i+1)%track.points.length],dx=b[0]-a[0],dy=b[1]-a[1],length=Math.hypot(dx,dy)||1;
+    const distance=distanceToSegment(gate[0],gate[1],a[0],a[1],b[0],b[1]);
+    const t=Math.max(0,Math.min(1,((gate[0]-a[0])*dx+(gate[1]-a[1])*dy)/(length*length)));
+    if(distance<best.distance)best={distance,nx:-dy/length,ny:dx/length,x:a[0]+dx*t,y:a[1]+dy*t};
+  }
+  return best;
+}
+function segmentsIntersect(ax,ay,bx,by,cx,cy,dx,dy){
+  const cross=(px,py,qx,qy,rx,ry)=>(qx-px)*(ry-py)-(qy-py)*(rx-px);
+  const a=cross(ax,ay,bx,by,cx,cy),b=cross(ax,ay,bx,by,dx,dy);
+  const c=cross(cx,cy,dx,dy,ax,ay),d=cross(cx,cy,dx,dy,bx,by);
+  return ((a<=0&&b>=0)||(a>=0&&b<=0))&&((c<=0&&d>=0)||(c>=0&&d<=0));
 }
 
 /** Vanishing Grid (Fall-Guys style) — a finite square platform + stacked floors.
@@ -83,7 +112,17 @@ const DRAWING_WORDS = [
 ];
 
 const SIMULTANEOUS_MODES = new Set(["trivia", "map"]);
-const TURN_MODES = new Set(["curling", "bomb"]);
+const TURN_MODES = new Set(["curling", "golf", "bomb"]);
+// Keep these in world units and mirror them in the canvas renderer. A token
+// must never look larger than the body that the server actually collides.
+const CURLING_STONE_RADIUS = 25;
+const GOLF_BALL_RADIUS = 15;
+const GOLF_COURSES = [
+  {id:"corner",name:"Corner Bank",rects:[{x:55,y:65,w:390,h:150},{x:55,y:65,w:130,h:575}],starts:[{x:126,y:570},{x:108,y:590},{x:86,y:608},{x:72,y:620}],hole:{x:405,y:125}},
+  {id:"switchback",name:"Switchback Green",rects:[{x:55,y:490,w:320,h:130},{x:245,y:170,w:130,h:450},{x:245,y:65,w:200,h:235}],starts:[{x:150,y:535},{x:120,y:550},{x:90,y:570},{x:72,y:590}],hole:{x:405,y:115}},
+  {id:"serpent",name:"Serpent Fairway",rects:[{x:55,y:65,w:390,h:120},{x:315,y:65,w:130,h:280},{x:55,y:225,w:390,h:120},{x:55,y:225,w:130,h:300},{x:55,y:405,w:320,h:120}],starts:[{x:290,y:445},{x:315,y:463},{x:340,y:482},{x:355,y:505}],hole:{x:95,y:125}},
+  {id:"bumpers",name:"Bumper Garden",rects:[{x:55,y:65,w:390,h:575}],obstacles:[{x:178,y:190,w:62,h:190},{x:310,y:335,w:72,h:72},{x:285,y:105,w:48,h:92}],starts:[{x:250,y:565},{x:220,y:580},{x:280,y:595},{x:190,y:610}],hole:{x:405,y:115}}
+];
 
 /**
  * Drives the game loop for all rooms and every game mode. Server-authoritative:
@@ -99,6 +138,8 @@ class GameManager {
     this.clearTimer = deps.clearTimer ?? ((h) => clearTimeout(h));
     this.minPlayersToStart = deps.minPlayersToStart ?? 2;
     this.defaultRoundMs = deps.roundDurationMs ?? ROUND_DURATION_MS;
+    this.roundCountdownMs = deps.roundCountdownMs ?? 3000;
+    this.random = deps.random ?? Math.random;
     /** @type {Map<string, *>} room code -> active timer handle */
     this.timers = new Map();
   }
@@ -120,9 +161,14 @@ class GameManager {
     return room.currentMode ?? room.settings?.mode ?? "trivia";
   }
 
+  pickRandomDifferent(items,lastId){
+    const choices=items.length>1&&lastId?items.filter((item)=>item.id!==lastId):items;
+    return choices[Math.floor(this.random()*choices.length)]||items[0];
+  }
+
   /** Content-availability check for a mode; returns an error string or null. */
   contentError(room, mode, categories) {
-    if (["bomb", "platformer", "drawing", "pushy", "redlight", "hidebomb", "colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "pong", "doors"].includes(mode)) return null;
+    if (["bomb", "golf", "platformer", "drawing", "pushy", "redlight", "hidebomb", "colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "runner", "painter", "pong", "doors"].includes(mode)) return null;
     if (mode === "timeline") {
       const connected = this.roomManager.connectedPlayers(room).length;
       if (availableQuestionCount("timeline", categories) < connected + 4) {
@@ -173,9 +219,14 @@ class GameManager {
     }
 
     room.arcade = settings.arcade && playlist.length > 1
-      ? { playlist, legIndex: 0 }
+      ? { playlist, legIndex: -1, battle: true, target: settings.battleTarget ?? 5,
+          wins: {}, spinnerIndex: 0, spinnerId: connected[0].id, awaitingSpin: true,
+          pendingMode: null, previousMode: null, modeHistory: [], scoresAtLegStart: {} }
       : null;
-    room.currentMode = playlist[0];
+    room.currentMode = room.arcade ? null : playlist[0];
+    // Curling is a compact best-of-two-set match. Each set still gives every
+    // player the full three stones.
+    if (!room.arcade && room.currentMode === "curling") room.totalRounds = Math.min(2, room.totalRounds);
 
     // Reset scores ONCE for the whole session (arcade scores carry across legs).
     for (const player of Object.values(room.players)) {
@@ -185,8 +236,110 @@ class GameManager {
     }
     room.lastActivity = Date.now();
 
-    this.beginMode(room);
+    if (room.arcade?.battle) {
+      for (const player of connected) room.arcade.wins[player.id] = 0;
+      this.showBattleWheel(room, { first: true });
+    } else {
+      this.beginMode(room);
+    }
     return { ok: true };
+  }
+
+  battleStandings(room) {
+    const wins = room.arcade?.wins ?? {};
+    return Object.values(room.players)
+      .map((p) => ({ playerId: p.id, name: p.name, avatar: p.avatar,
+        wins: wins[p.id] ?? 0, score: wins[p.id] ?? 0, points: p.score ?? 0 }))
+      .sort((a, b) => b.wins - a.wins || b.points - a.points);
+  }
+
+  showBattleWheel(room, extra = {}) {
+    this.disarmTimer(room);
+    const battle = room.arcade;
+    const connected = this.roomManager.connectedPlayers(room);
+    if (!battle || !connected.length) return;
+    battle.spinnerIndex %= connected.length;
+    battle.spinnerId = connected[battle.spinnerIndex].id;
+    battle.ceremonyPending = !extra.first && !!extra.lastWinners?.length;
+    battle.awaitingSpin = !battle.ceremonyPending;
+    battle.pendingMode = null;
+    room.state = GAME_STATES.INTERMISSION;
+    room.deadline = null;
+    const payload = { battle: true, awaitingSpin: battle.awaitingSpin, ceremonyPending:battle.ceremonyPending, first: !!extra.first,
+      spinnerId: battle.spinnerId, spinnerName: room.players[battle.spinnerId]?.name,
+      options: battle.playlist, target: battle.target, wins: battle.wins,
+      standings: this.battleStandings(room), lastWinners: extra.lastWinners ?? [] };
+    room.lastIntermission = payload;
+    this.emitRoom(room.code, "arcade:intermission", payload);
+    if (battle.awaitingSpin && room.players[battle.spinnerId]?.isBot) {
+      const botWheelTimer = this.setTimer(() => this.spinBattleWheel(room, battle.spinnerId), 1200);
+      this.timers.set(room.code, botWheelTimer);
+    }
+  }
+
+  proceedBattleCeremony(room,socketId){
+    const battle=room?.arcade;
+    if(!room||room.state!==GAME_STATES.INTERMISSION||!battle?.battle||!battle.ceremonyPending)
+      return {ok:false,error:"There is no star ceremony to continue."};
+    if(socketId!==room.hostId)return {ok:false,error:"Only the host can continue to the wheel."};
+    battle.ceremonyPending=false;battle.awaitingSpin=true;
+    if(room.lastIntermission){room.lastIntermission.ceremonyPending=false;room.lastIntermission.awaitingSpin=true;}
+    this.emitRoom(room.code,"battle:ceremony-ended",{spinnerId:battle.spinnerId,spinnerName:room.players[battle.spinnerId]?.name});
+    if(room.players[battle.spinnerId]?.isBot){
+      const timer=this.setTimer(()=>this.spinBattleWheel(room,battle.spinnerId),1200);this.timers.set(room.code,timer);
+    }
+    return {ok:true};
+  }
+
+  spinBattleWheel(room, socketId) {
+    const battle = room?.arcade;
+    if (!room || room.state !== GAME_STATES.INTERMISSION || !battle?.battle || !battle.awaitingSpin) {
+      return { ok: false, error: "The wheel is not ready to spin." };
+    }
+    if (socketId !== battle.spinnerId) return { ok: false, error: "It is another player's turn to spin." };
+    const weighted=this.battleModeWeights(battle);
+    const totalWeight=weighted.reduce((sum,item)=>sum+item.weight,0);
+    let roll=Math.random()*totalWeight,selectedMode=weighted.at(-1)?.mode;
+    for(const item of weighted){roll-=item.weight;if(roll<=0){selectedMode=item.mode;break;}}
+    battle.awaitingSpin = false;
+    battle.pendingMode = selectedMode;
+    battle.spinEndsAt = Date.now() + 3400;
+    battle.modeHistory.push(selectedMode);
+    if(battle.modeHistory.length>8)battle.modeHistory.shift();
+    this.emitRoom(room.code, "battle:wheel-result", { selectedMode, options: battle.playlist, spinnerId: socketId });
+    this.disarmTimer(room);
+    const wheelTimer = this.setTimer(() => {
+      if (room.state !== GAME_STATES.INTERMISSION || battle.pendingMode !== selectedMode) return;
+      battle.spinEndsAt = null;
+      const startsAt=Date.now()+3000;
+      this.emitRoom(room.code,"battle:countdown",{mode:selectedMode,startsAt,seconds:3});
+      const countdownTimer=this.setTimer(()=>{
+        if(room.state!==GAME_STATES.INTERMISSION||battle.pendingMode!==selectedMode)return;
+        battle.legIndex += 1;
+        battle.previousMode = selectedMode;
+        battle.pendingMode = null;
+        room.currentMode = selectedMode;
+        battle.scoresAtLegStart = Object.fromEntries(Object.values(room.players).map((p) => [p.id, p.score ?? 0]));
+        this.emitRoom(room.code, "battle:started", { legIndex: battle.legIndex, mode: selectedMode });
+        this.beginMode(room);
+      },3000);
+      this.timers.set(room.code,countdownTimer);
+    }, 3400);
+    this.timers.set(room.code, wheelTimer);
+    return { ok: true, selectedMode };
+  }
+
+  battleModeWeights(battle){
+    const playlist=[...new Set(battle?.playlist||[])],history=battle?.modeHistory||[];
+    if(playlist.length<=1)return playlist.map((mode)=>({mode,weight:1}));
+    return playlist.map((mode)=>{
+      const reverseAge=[...history].reverse().findIndex((played)=>played===mode);
+      // No immediate repeat. Recent games then recover from 12% -> 35% ->
+      // 65% before returning to their normal wheel probability.
+      const weight=reverseAge < 0 ? 1 : reverseAge === 0 ? 0 :
+        reverseAge === 1 ? .12 : reverseAge === 2 ? .35 : reverseAge === 3 ? .65 : 1;
+      return {mode,weight};
+    });
   }
 
   /**
@@ -213,6 +366,7 @@ class GameManager {
       this.beginRound(room);
       return;
     }
+    if(mode==="golf"){room.golf=null;room.questions=[];this.beginRound(room);return;}
     if (mode === "drawing") {
       room.drawing = { drawerIndex: 0, usedWords: [] };
       this.beginRound(room);
@@ -233,7 +387,7 @@ class GameManager {
       this.beginRound(room);
       return;
     }
-    if (["colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "pong"].includes(mode)) {
+    if (["colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "runner", "painter", "pong"].includes(mode)) {
       room.arena = null;
       this.beginRound(room);
       return;
@@ -267,6 +421,21 @@ class GameManager {
    * intermission for the host to advance; otherwise finish the whole game.
    */
   finishMode(room, extra = {}) {
+    if (room.arcade?.battle) {
+      const battle = room.arcade;
+      const deltas = Object.values(room.players).map((p) => ({ id: p.id,
+        delta: (p.score ?? 0) - (battle.scoresAtLegStart[p.id] ?? 0) }));
+      const best = Math.max(0, ...deltas.map((d) => d.delta));
+      const winners = deltas.filter((d) => d.delta === best).map((d) => d.id);
+      winners.forEach((id) => { battle.wins[id] = (battle.wins[id] ?? 0) + 1; });
+      if (winners.some((id) => battle.wins[id] >= battle.target)) {
+        this.finishGame(room, { battle: true });
+        return;
+      }
+      battle.spinnerIndex += 1;
+      this.showBattleWheel(room, { lastWinners: winners });
+      return;
+    }
     if (room.arcade && room.arcade.legIndex < room.arcade.playlist.length - 1) {
       this.disarmTimer(room);
       room.state = GAME_STATES.INTERMISSION;
@@ -288,6 +457,7 @@ class GameManager {
   /** Host advances from an arcade intermission to the next mode. */
   startNextLeg(room, socketId) {
     if (!room) return { ok: false, error: "Room not found." };
+    if (room?.arcade?.battle) return this.spinBattleWheel(room, socketId);
     if (socketId !== room.hostId) {
       return { ok: false, error: "Only the host can start the next game." };
     }
@@ -309,18 +479,20 @@ class GameManager {
   // ---- round dispatch -------------------------------------------------------
 
   beginRound(room) {
+    room.roundTransitioning = false;
     room.lastResults = null;
     const mode = this.mode(room);
     for (const player of Object.values(room.players)) player.guess = null;
 
     if (mode === "bomb") return this.beginBombRound(room);
     if (mode === "curling") return this.beginCurlingRound(room);
+    if (mode === "golf") return this.beginGolfRound(room);
     if (mode === "platformer") return this.beginPlatformerRound(room);
     if (mode === "drawing") return this.beginDrawingRound(room);
     if (mode === "pushy") return this.beginPushyRound(room);
     if (mode === "redlight") return this.beginRedLightRound(room);
     if (mode === "hidebomb") return this.beginHideBombRound(room);
-    if (["colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "pong"].includes(mode)) return this.beginArenaRound(room, mode);
+    if (["colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "runner", "painter", "pong"].includes(mode)) return this.beginArenaRound(room, mode);
     if (mode === "doors") return this.beginDoorsRound(room);
     return this.beginSimultaneousRound(room); // trivia, map
   }
@@ -376,7 +548,7 @@ class GameManager {
     if (!player || !player.connected) {
       return { ok: false, error: "You are not in this room." };
     }
-    if (player.guess !== null) {
+    if (player.guess !== null && !["curling","golf"].includes(mode)) {
       return { ok: false, error: "You have already submitted a guess." };
     }
     if (TURN_MODES.has(mode) && room.turnOrder[room.turnIndex] !== socketId) {
@@ -393,6 +565,26 @@ class GameManager {
         return { ok: false, error: "Tap the map to place your pin." };
       }
       player.guess = { lat, lng };
+    } else if(mode==="curling"){
+      if(Date.now()<(room.curlingPlaybackUntil||0))return {ok:false,error:"Wait for the current stone to settle."};
+      const shot=typeof rawGuess==="object"&&rawGuess?rawGuess:{direction:0,power:Number(rawGuess)/1000};
+      const direction=Number(shot.direction),power=Number(shot.power);
+      if(!Number.isFinite(direction)||!Number.isFinite(power)||direction < -1||direction > 1||power < 0||power > 1)
+        return {ok:false,error:"Invalid curling shot."};
+      const guess={direction,power},throwNumber=(room.curlingThrows?.[socketId]||0)+1;
+      const stoneId=`${socketId}:${throwNumber}`;
+      room.curlingTrajectory=this.simulateCurlingShot(room,socketId,stoneId,guess);
+      room.curlingThrows[socketId]=throwNumber;
+      room.curlingShotLog.push({stoneId,playerId:socketId,guess,throwNumber});
+      room.curlingPlaybackUntil=Date.now()+room.curlingTrajectory.length*25+1200;
+      room.curlingShotSeq=(room.curlingShotSeq||0)+1;   // identifies this shot to clients
+    } else if(mode==="golf"){
+      if(Date.now()<(room.golf?.playbackUntil||0))return{ok:false,error:"Wait for the ball to stop."};
+      const direction=Number(rawGuess?.direction),power=Number(rawGuess?.power);
+      if(!Number.isFinite(direction)||!Number.isFinite(power)||Math.abs(direction)>1||power<0||power>1)return{ok:false,error:"Invalid golf shot."};
+      room.golf.trajectory=this.simulateGolfShot(room,socketId,{direction,power});
+      room.golf.shots[socketId]=(room.golf.shots[socketId]||0)+1;
+      room.golf.playbackUntil=Date.now()+room.golf.trajectory.length*25+800;
     } else {
       const guess = typeof rawGuess === "string" ? Number(rawGuess) : rawGuess;
       if (!Number.isFinite(guess)) {
@@ -407,8 +599,10 @@ class GameManager {
 
     if (mode === "curling") {
       // Reveal this shot to everyone, then move to the next player.
-      this.emitRoom(room.code, "turn:update", this.curlingState(room, socketId, player.guess));
+      this.emitRoom(room.code, "turn:update", this.curlingState(room, socketId, room.curlingShotLog.at(-1)?.guess));
       this.advanceCurling(room);
+    } else if(mode==="golf"){
+      this.emitRoom(room.code,"turn:update",this.golfState(room));this.advanceGolf(room);
     } else {
       this.emitRoom(room.code, "round:progress", this.progress(room));
       if (this.allConnectedSubmitted(room)) this.revealResults(room);
@@ -440,11 +634,19 @@ class GameManager {
   }
 
   beginCurlingRound(room) {
-    const question = room.questions[room.roundIndex];
+    const question = {
+      id:`curling-shot-${room.roundIndex}`,
+      text:"Slide your stones into the scoring zones.",
+      unit:"power",category:"Skill shot",answer:724
+    };
     room.currentQuestion = question;
     room.state = GAME_STATES.QUESTION;
-    room.turnOrder = this.buildTurnOrder(room);
+    const baseOrder=this.buildTurnOrder(room);
+    room.turnOrder = [...baseOrder,...baseOrder,...baseOrder];
     room.turnIndex = 0;
+    room.curlingStones=[];
+    room.curlingThrows={};room.curlingShotLog=[];room.curlingPlaybackUntil=0;
+    room.curlingTrajectory=null;room.curlingShotSeq=0;
     this.startCurlingTurn(room);
   }
 
@@ -456,9 +658,10 @@ class GameManager {
     ) {
       room.turnIndex++;
     }
-    if (room.turnIndex >= room.turnOrder.length) return this.revealResults(room);
+    if (room.turnIndex >= room.turnOrder.length) return this.finishCurlingRound(room);
 
-    room.deadline = Date.now() + this.turnDurationMs(room);
+    const playbackWait=Math.max(0,(room.curlingPlaybackUntil||0)-Date.now());
+    room.deadline = Date.now() + this.turnDurationMs(room)+playbackWait;
     this.emitRoom(room.code, "turn:started", {
       mode: "curling",
       roundNumber: room.roundIndex + 1,
@@ -467,6 +670,7 @@ class GameManager {
       activePlayerId: room.turnOrder[room.turnIndex],
       order: this.curlingOrderView(room),
       shots: this.curlingShots(room),
+      stones:room.curlingStones,
       deadline: room.deadline
     });
 
@@ -481,45 +685,221 @@ class GameManager {
         }
         this.advanceCurling(cur);
       }
-    }, this.turnDurationMs(room));
+    }, this.turnDurationMs(room)+playbackWait);
     this.timers.set(room.code, handle);
   }
 
   advanceCurling(room) {
     room.turnIndex++;
-    if (room.turnIndex >= room.turnOrder.length) return this.revealResults(room);
+    if (room.turnIndex >= room.turnOrder.length) return this.finishCurlingRound(room);
     this.startCurlingTurn(room);
   }
 
   curlingOrderView(room) {
-    return room.turnOrder.map((id, i) => ({
+    const activeId=room.turnOrder[room.turnIndex];
+    return this.buildTurnOrder(room).map((id) => ({
       playerId: id,
       name: room.players[id]?.name ?? "?",
-      done: room.players[id]?.guess !== null || !room.players[id]?.connected,
-      active: i === room.turnIndex
+      done: (room.curlingThrows?.[id]||0)>=3 || !room.players[id]?.connected,
+      active: id === activeId,
+      stonesThrown:room.curlingThrows?.[id]||0,stonesTotal:3
     }));
   }
 
   curlingShots(room) {
     // Guesses already made this round (revealed to all; answer stays hidden).
-    return room.turnOrder
-      .filter((id) => room.players[id]?.guess !== null && room.players[id]?.guess !== undefined)
-      .map((id) => ({
-        playerId: id,
-        name: room.players[id].name,
-        guess: room.players[id].guess
-      }));
+    return (room.curlingShotLog||[]).map((entry) => {
+      const id=entry.playerId;
+      return {
+        stoneId:entry.stoneId,playerId:id,
+        name: room.players[id]?.name||"?",
+        avatar: room.players[id]?.avatar,
+        guess:entry.guess,throwNumber:entry.throwNumber,
+        stone:room.curlingStones.find((stone)=>stone.stoneId===entry.stoneId)
+      };
+    });
   }
 
   curlingState(room, lastPlayerId, lastGuess) {
+    // Only hand out the trajectory while its playback is actually running.
+    // It used to be included in every state emit and was cleared only at the
+    // start of a round, so each turn:update made clients restart the previous
+    // shot's animation from frame zero — replaying its collision and stone-off
+    // sounds while something else entirely was happening on screen.
+    const playing = Date.now() < (room.curlingPlaybackUntil || 0);
     return {
       mode: "curling",
       lastPlayerId,
       lastGuess,
       lastName: room.players[lastPlayerId]?.name,
       order: this.curlingOrderView(room),
-      shots: this.curlingShots(room)
+      shots: this.curlingShots(room),
+      stones:room.curlingStones,
+      trajectory: playing ? room.curlingTrajectory : null,
+      // Lets the client tell a genuinely new shot from a repeat of the one it
+      // is already animating, so a mid-playback update never restarts it.
+      trajectoryId: playing ? (room.curlingShotSeq || 0) : 0,
+      collisionFrames: playing ? (room.curlingCollisionFrames || []) : []
     };
+  }
+
+  simulateCurlingShot(room,playerId,stoneId,shot){
+    const bodies=(room.curlingStones||[]).map((s)=>({...s,vx:0,vy:0}));
+    const angle=shot.direction*18*Math.PI/180,speed=340+shot.power*330;
+    bodies.push({playerId,stoneId,x:0,y:720,vx:Math.sin(angle)*speed,vy:-Math.cos(angle)*speed,off:false});
+    const frames=[],collisionFrames=[],dt=1/120,radius=CURLING_STONE_RADIUS;
+    for(let step=0;step<1440;step++){
+      let moving=false;
+      for(const b of bodies){
+        if(b.off)continue;
+        b.x+=b.vx*dt;b.y+=b.vy*dt;
+        const v=Math.hypot(b.vx,b.vy);
+        if(v>0){
+          const next=Math.max(0,v-240*dt),ratio=v?next/v:0;b.vx*=ratio;b.vy*=ratio;
+          if(next>3)moving=true;
+        }
+        // A stone falls once its centre crosses the board boundary: at that
+        // point more than half of its body is unsupported.
+        if(Math.abs(b.x)>150||b.y<-13||b.y>808){b.off=true;b.vx=0;b.vy=0;}
+      }
+      for(let i=0;i<bodies.length;i++)for(let j=i+1;j<bodies.length;j++){
+        const a=bodies[i],b=bodies[j];if(a.off||b.off)continue;
+        let dx=b.x-a.x,dy=b.y-a.y,dist=Math.hypot(dx,dy);
+        if(dist<=0||dist>=radius*2)continue;
+        const nx=dx/dist,ny=dy/dist,overlap=radius*2-dist;
+        a.x-=nx*overlap/2;a.y-=ny*overlap/2;b.x+=nx*overlap/2;b.y+=ny*overlap/2;
+        const relative=(b.vx-a.vx)*nx+(b.vy-a.vy)*ny;
+        if(relative<0){
+          const impulse=-(1+.9)*relative/2;
+          a.vx-=impulse*nx;a.vy-=impulse*ny;b.vx+=impulse*nx;b.vy+=impulse*ny;
+          const frameIndex=Math.floor(step/3);
+          if(collisionFrames.at(-1)!==frameIndex)collisionFrames.push(frameIndex);
+          moving=true;
+        }
+      }
+      if(step%3===0)frames.push(bodies.map(({playerId,stoneId,x,y,off})=>({playerId,stoneId,x,y,off})));
+      if(!moving&&step>10)break;
+    }
+    // Always record the settled state as a final frame. Frames are sampled
+    // every third step, and a stone leaving the board freezes it — so if that
+    // happened on a step that was not a multiple of three, the loop broke
+    // before the `off` flag was ever sampled. The client then never saw the
+    // stone go out: no stone-off sound, and it stayed drawn until the
+    // animation ended. It only showed up when you shot your own stone
+    // straight out, because knocking someone else's out leaves other stones
+    // moving, which keeps the loop running long enough to sample it.
+    frames.push(bodies.map(({playerId,stoneId,x,y,off})=>({playerId,stoneId,x,y,off})));
+    room.curlingStones=bodies.map(({playerId,stoneId,x,y,off})=>({playerId,stoneId,x,y,off}));
+    room.curlingCollisionFrames=collisionFrames;
+    return frames;
+  }
+
+  finishCurlingRound(room){
+    this.disarmTimer(room);
+    const stonePoints=(stone)=>stone.off||Math.abs(stone.x)>150?0:stone.y<22?5:stone.y<108?3:stone.y<162?2:stone.y<220?1:0;
+    const ranking=this.roomManager.connectedPlayers(room).map((p)=>{
+      const stones=room.curlingStones.filter((s)=>s.playerId===p.id),score=stones.reduce((sum,s)=>sum+stonePoints(s),0);
+      const bestDistance=Math.min(9999,...stones.filter(s=>!s.off).map(s=>Math.hypot(s.x,s.y-130)));
+      return {playerId:p.id,name:p.name,avatar:p.avatar,stones,score,distance:bestDistance,off:stones.every(s=>s.off)};
+    }).sort((a,b)=>b.score-a.score||a.distance-b.distance);
+    ranking.forEach((entry,index)=>{
+      entry.pointsAwarded=[100,60,30,10][index]||10;
+      room.players[entry.playerId].score+=entry.pointsAwarded;
+      entry.totalScore=room.players[entry.playerId].score;
+    });
+    room.state=GAME_STATES.RESULTS;room.deadline=null;
+    const payload={mode:"curling",ranking,roundNumber:room.roundIndex+1,totalRounds:room.totalRounds,
+      isFinalRound:room.roundIndex+1>=room.totalRounds};
+    room.lastResults=payload;this.emitRoom(room.code,"round:results",payload);
+  }
+
+  // ---- Ricochet Golf -------------------------------------------------------
+
+  golfCourse(id="corner"){return GOLF_COURSES.find((course)=>course.id===id)||GOLF_COURSES[0];}
+  golfInside(x,y,r=GOLF_BALL_RADIUS,courseId="corner"){
+    const course=this.golfCourse(courseId);
+    const onFairway=course.rects.some((rect)=>x>=rect.x+r&&x<=rect.x+rect.w-r&&y>=rect.y+r&&y<=rect.y+rect.h-r);
+    const inObstacle=(course.obstacles||[]).some((rect)=>x>=rect.x-r&&x<=rect.x+rect.w+r&&y>=rect.y-r&&y<=rect.y+rect.h+r);
+    return onFairway&&!inObstacle;
+  }
+
+  beginGolfRound(room){
+    room.state=GAME_STATES.QUESTION;room.currentQuestion={id:`golf-${room.roundIndex}`,text:"Bank your ball around the corner and into the hole.",unit:"power",category:"Ricochet Golf",answer:0};
+    const players=this.roomManager.connectedPlayers(room);
+    const course=this.pickRandomDifferent(GOLF_COURSES,room.lastGolfCourseId);room.lastGolfCourseId=course.id;
+    const ordered=[...players];for(let i=ordered.length-1;i>0;i--){const j=Math.floor(this.random()*(i+1));[ordered[i],ordered[j]]=[ordered[j],ordered[i]];}
+    const opening=ordered[0]?.id;
+    room.golf={balls:{},shots:{},trajectory:null,wallFrames:[],collisionFrames:[],playbackUntil:0,courseId:course.id,hole:{...course.hole},maxShots:5,openingPlayerId:opening,openingOrder:ordered.map((p)=>p.id),firstHoledPlayerId:null};
+    ordered.forEach((p,i)=>{const spot=course.starts[Math.min(i,course.starts.length-1)];room.golf.balls[p.id]={playerId:p.id,x:spot.x,y:spot.y,holed:false};room.golf.shots[p.id]=0;});
+    this.startGolfTurn(room);
+  }
+
+  golfDistance(room,id){const b=room.golf.balls[id],h=room.golf.hole;return b?.holed?0:Math.hypot((b?.x||0)-h.x,(b?.y||0)-h.y);}
+  golfOrder(room){
+    const active=room.turnOrder?.[room.turnIndex];
+    return this.roomManager.connectedPlayers(room).map((p)=>({playerId:p.id,name:p.name,avatar:p.avatar,
+      active:p.id===active,holed:!!room.golf.balls[p.id]?.holed,shots:room.golf.shots[p.id]||0,distance:Math.round(this.golfDistance(room,p.id))}))
+      .sort((a,b)=>Number(a.holed)-Number(b.holed)||b.distance-a.distance||a.shots-b.shots);
+  }
+  golfState(room){const course=this.golfCourse(room.golf.courseId);return{mode:"golf",balls:Object.values(room.golf.balls),hole:room.golf.hole,
+    course:{id:course.id,name:course.name,rects:course.rects,obstacles:course.obstacles||[]},order:this.golfOrder(room),trajectory:room.golf.trajectory,firstHoledPlayerId:room.golf.firstHoledPlayerId,
+    wallFrames:room.golf.wallFrames||[],collisionFrames:room.golf.collisionFrames||[]};}
+
+  startGolfTurn(room){
+    const candidates=this.roomManager.connectedPlayers(room).filter((p)=>!room.golf.balls[p.id]?.holed&&(room.golf.shots[p.id]||0)<room.golf.maxShots);
+    if(!candidates.length)return this.finishGolfRound(room);
+    const openingCandidate=(room.golf.openingOrder||[]).find((id)=>candidates.some((p)=>p.id===id)&&(room.golf.shots[id]||0)===0);
+    candidates.sort((a,b)=>openingCandidate?Number(b.id===openingCandidate)-Number(a.id===openingCandidate):
+      this.golfDistance(room,b.id)-this.golfDistance(room,a.id)||(room.golf.shots[a.id]||0)-(room.golf.shots[b.id]||0));
+    room.turnOrder=[candidates[0].id];room.turnIndex=0;
+    const wait=Math.max(0,(room.golf.playbackUntil||0)-Date.now());room.deadline=Date.now()+this.turnDurationMs(room)+wait;
+    this.emitRoom(room.code,"turn:started",{mode:"golf",roundNumber:room.roundIndex+1,totalRounds:room.totalRounds,question:toPublicQuestion(room.currentQuestion),
+      activePlayerId:candidates[0].id,...this.golfState(room),trajectory:null,deadline:room.deadline});
+    this.disarmTimer(room);this.timers.set(room.code,this.setTimer(()=>{const cur=this.roomManager.getRoom(room.code);if(cur?.state===GAME_STATES.QUESTION&&this.mode(cur)==="golf"){
+      const timedOut=cur.turnOrder[cur.turnIndex];cur.golf.shots[timedOut]=(cur.golf.shots[timedOut]||0)+1;this.advanceGolf(cur);
+    }},this.turnDurationMs(room)+wait));
+  }
+  advanceGolf(room){this.startGolfTurn(room);}
+
+  simulateGolfShot(room,playerId,shot){
+    const bodies=Object.values(room.golf.balls).map((b)=>({...b,vx:0,vy:0})),ball=bodies.find((b)=>b.playerId===playerId),hole=room.golf.hole;
+    if(!ball||ball.holed)return[];
+    const base=Math.atan2(hole.y-ball.y,hole.x-ball.x),angle=base+shot.direction*Math.PI,speed=55+shot.power*525;
+    ball.vx=Math.cos(angle)*speed;ball.vy=Math.sin(angle)*speed;
+    const frames=[],wallFrames=[],collisionFrames=[],dt=1/120,radius=GOLF_BALL_RADIUS;
+    for(let step=0;step<1800;step++){
+      let moving=false;
+      for(const b of bodies){if(b.holed)continue;let nx=b.x+b.vx*dt,ny=b.y+b.vy*dt;
+        if(this.golfInside(nx,b.y,radius,room.golf.courseId))b.x=nx;else{b.vx*=-.82;nx=b.x;wallFrames.push(Math.floor(step/3));}
+        if(this.golfInside(b.x,ny,radius,room.golf.courseId))b.y=ny;else{b.vy*=-.82;ny=b.y;wallFrames.push(Math.floor(step/3));}
+        const v=Math.hypot(b.vx,b.vy),next=Math.max(0,v-105*dt),ratio=v?next/v:0;b.vx*=ratio;b.vy*=ratio;
+        if(Math.hypot(b.x-hole.x,b.y-hole.y)<17&&next<150){b.holed=true;b.x=hole.x;b.y=hole.y;b.vx=b.vy=0;room.golf.firstHoledPlayerId??=b.playerId;}
+        if(next>4)moving=true;
+      }
+      for(let i=0;i<bodies.length;i++)for(let j=i+1;j<bodies.length;j++){const a=bodies[i],b=bodies[j];if(a.holed||b.holed)continue;
+        const dx=b.x-a.x,dy=b.y-a.y,dist=Math.hypot(dx,dy);if(!dist||dist>=radius*2)continue;const ux=dx/dist,uy=dy/dist,over=radius*2-dist;
+        // Ball-to-ball separation happens after wall resolution. Only accept
+        // a correction if the whole ball remains on the fairway; otherwise a
+        // hard nudge into a bend could leave a ball visibly inside a wall.
+        const ax=a.x-ux*over/2,ay=a.y-uy*over/2,bx=b.x+ux*over/2,by=b.y+uy*over/2;
+        if(this.golfInside(ax,ay,radius,room.golf.courseId)){a.x=ax;a.y=ay;}
+        if(this.golfInside(bx,by,radius,room.golf.courseId)){b.x=bx;b.y=by;}
+        const rel=(b.vx-a.vx)*ux+(b.vy-a.vy)*uy;
+        if(rel<0){const imp=-(1+.88)*rel/2;a.vx-=imp*ux;a.vy-=imp*uy;b.vx+=imp*ux;b.vy+=imp*uy;collisionFrames.push(Math.floor(step/3));moving=true;}}
+      if(step%3===0)frames.push(bodies.map(({playerId,x,y,holed})=>({playerId,x,y,holed})));
+      if(!moving&&step>12)break;
+    }
+    room.golf.wallFrames=[...new Set(wallFrames)];room.golf.collisionFrames=[...new Set(collisionFrames)];
+    room.golf.balls=Object.fromEntries(bodies.map(({playerId,x,y,holed})=>[playerId,{playerId,x,y,holed}]));return frames;
+  }
+
+  finishGolfRound(room){
+    this.disarmTimer(room);const ranking=this.roomManager.connectedPlayers(room).map((p)=>({playerId:p.id,name:p.name,avatar:p.avatar,
+      holed:!!room.golf.balls[p.id]?.holed,shots:room.golf.shots[p.id]||0,distance:Math.round(this.golfDistance(room,p.id))}))
+      .sort((a,b)=>Number(b.holed)-Number(a.holed)||(a.holed?a.shots-b.shots:a.distance-b.distance));
+    ranking.forEach((r,i)=>{r.pointsAwarded=[100,60,30,10][i]||10;room.players[r.playerId].score+=r.pointsAwarded;r.totalScore=room.players[r.playerId].score;});
+    room.state=GAME_STATES.RESULTS;room.deadline=null;const payload={mode:"golf",ranking,roundNumber:room.roundIndex+1,totalRounds:room.totalRounds,isFinalRound:room.roundIndex+1>=room.totalRounds};
+    room.lastResults=payload;this.emitRoom(room.code,"round:results",payload);
   }
 
   // ---- bomb (Nim-style hot potato) ------------------------------------------
@@ -630,8 +1010,7 @@ class GameManager {
     const settings = room.settings ?? {};
     const connected = this.roomManager.connectedPlayers(room);
     room.state = GAME_STATES.QUESTION;
-    // 3+ players -> collaborative team-voting; otherwise solo Hitster turns.
-    room.hitster = { target: settings.target ?? 11, teamVote: connected.length > 2 };
+    room.hitster = { target: settings.target ?? 11, teamVote: false };
     // Shuffled draw pile of events (respecting the category filter).
     room.drawPile = pickQuestions({ mode: "timeline", count: 9999, categories: settings.categories })
       .map((q) => ({ id: q.id, label: q.text, year: q.answer, category: q.category }));
@@ -643,22 +1022,38 @@ class GameManager {
     room.pushy = null;
     room.redlight = null;
 
-    if (room.hitster.teamVote) {
-      // One shared timeline; seed it with a face-up card so slots exist.
-      const seed = room.drawPile[room.drawPointer++];
-      room.sharedTimeline = seed ? [{ id: seed.id, label: seed.label, year: seed.year }] : [];
-      for (const p of connected) { p.score = 0; p.cards = []; }
-      this.startTeamVoteRound(room);
-      return;
-    }
+    // A quick party-style draw decides whether this match is solo or teams.
+    // Two players stay solo; larger groups get an even split about half the time.
+    const teamMode = connected.length >= 3 && this.random() < .5;
+    const shuffled = [...connected];
+    for(let i=shuffled.length-1;i>0;i--){const j=Math.floor(this.random()*(i+1));[shuffled[i],shuffled[j]]=[shuffled[j],shuffled[i]];}
+    const palettes=[{name:"Coral Comets",color:"#fb7185"},{name:"Azure Arrows",color:"#38bdf8"}];
+    const groups=teamMode ? [shuffled.filter((_,i)=>i%2===0),shuffled.filter((_,i)=>i%2===1)] : shuffled.map((p,i)=>[p]);
+    room.timeline={teamMode,sides:groups.filter((g)=>g.length).map((members,i)=>{
+      const seed=room.drawPile[room.drawPointer++];
+      return {id:`side-${i}`,name:teamMode?palettes[i].name:members[0].name,color:teamMode?palettes[i].color:members[0].avatar?.color||palettes[i%2].color,memberIds:members.map((p)=>p.id),cards:seed?[{id:seed.id,label:seed.label,year:seed.year}]:[]};
+    }),picks:{}};
+    for(const p of connected){p.score=0;p.cards=[];}
+    this.emitRoom(room.code,"timeline:teams",{teamMode,sides:this.timelineSides(room),target:room.hitster.target});
+    this.startTimelineRound(room);
+  }
 
-    // Solo Hitster: seed each player with one face-up card (worth no points).
-    for (const p of connected) {
-      const card = room.drawPile[room.drawPointer++];
-      p.cards = card ? [{ id: card.id, label: card.label, year: card.year }] : [];
-      p.score = 0;
-    }
-    this.startTimelineTurn(room);
+  timelineSides(room){
+    return (room.timeline?.sides||[]).map((side)=>({id:side.id,name:side.name,color:side.color,memberIds:side.memberIds,
+      members:side.memberIds.map((id)=>({playerId:id,name:room.players[id]?.name||"?",avatar:room.players[id]?.avatar,score:room.players[id]?.score||0})),
+      cards:side.cards.slice().sort((a,b)=>a.year-b.year)}));
+  }
+  timelineSide(room,playerId){return (room.timeline?.sides||[]).find((side)=>side.memberIds.includes(playerId));}
+  timelineRoundPayload(room){return {mode:"timeline",teamMode:!!room.timeline?.teamMode,target:room.hitster.target,
+    card:room.currentCard?{id:room.currentCard.id,label:room.currentCard.label,category:room.currentCard.category}:null,
+    sides:this.timelineSides(room),picks:room.timeline?.picks||{},deadline:room.deadline};}
+  startTimelineRound(room){
+    if(room.drawPointer>=room.drawPile.length)return this.finishMode(room);
+    room.currentCard=room.drawPile[room.drawPointer++];room.timeline.picks={};room.deadline=Date.now()+this.roundDurationMs(room);
+    this.emitRoom(room.code,"turn:started",this.timelineRoundPayload(room));
+    this.disarmTimer(room);this.timers.set(room.code,this.setTimer(()=>{const cur=this.roomManager.getRoom(room.code);
+      if(cur?.state===GAME_STATES.QUESTION&&this.mode(cur)==="timeline")this.resolveTimelineRound(cur);
+    },this.roundDurationMs(room)));
   }
 
   // ---- timeline team voting -------------------------------------------------
@@ -859,19 +1254,40 @@ class GameManager {
     return year >= years[slotIndex - 1] && year <= years[slotIndex];
   }
 
-  /** Active player places the current card into a slot on their own timeline. */
+  resolveTimelineRound(room){
+    this.disarmTimer(room);
+    const card=room.currentCard, picks=room.timeline?.picks||{}, perPlayer=[];
+    for(const player of this.roomManager.connectedPlayers(room)){
+      const side=this.timelineSide(room,player.id), slot=picks[player.id]?.slot;
+      const correct=Number.isInteger(slot)&&!!side&&this.isPlacementCorrect(side.cards.slice().sort((a,b)=>a.year-b.year),slot,card.year);
+      if(correct)player.score=(player.score||0)+1;
+      perPlayer.push({playerId:player.id,name:player.name,avatar:player.avatar,sideId:side?.id,slot:slot??null,correct,score:player.score||0});
+    }
+    for(const side of room.timeline.sides){
+      if(perPlayer.some((p)=>p.sideId===side.id&&p.correct))side.cards.push({id:card.id,label:card.label,year:card.year});
+    }
+    const payload={teamMode:!!room.timeline.teamMode,card:{label:card.label,year:card.year,category:card.category},perPlayer,
+      sides:this.timelineSides(room),target:room.hitster.target};
+    room.lastPlacement=payload;room.lastActivity=Date.now();this.emitRoom(room.code,"timeline:result",payload);
+    if(perPlayer.some((p)=>p.score>=room.hitster.target))return this.finishMode(room,{lastPlacement:payload});
+    this.startTimelineRound(room);
+  }
+
+  /** Every player may keep moving their marker until the timer expires. */
   timelinePlace(room, socketId, rawSlot) {
     if (!room) return { ok: false, error: "Room not found." };
     if (this.mode(room) !== "timeline" || room.state !== GAME_STATES.QUESTION) {
       return { ok: false, error: "Not placing cards right now." };
     }
-    const activeId = room.turnOrder[room.turnIndex % room.turnOrder.length];
-    if (socketId !== activeId) return { ok: false, error: "It is not your turn." };
     const player = room.players[socketId];
+    if(!player?.connected)return {ok:false,error:"You are not in this room."};
+    const side=this.timelineSide(room,socketId);
+    if(!side)return {ok:false,error:"No timeline assigned."};
     let slot = Math.floor(Number(rawSlot));
     if (!Number.isFinite(slot)) return { ok: false, error: "Pick a slot." };
-    slot = Math.max(0, Math.min(player.cards.length, slot));
-    this.resolveTimelinePlacement(room, socketId, slot, false);
+    slot = Math.max(0, Math.min(side.cards.length, slot));
+    room.timeline.picks[socketId]={slot};room.lastActivity=Date.now();
+    this.emitRoom(room.code,"timeline:picks",{picks:room.timeline.picks});
     return { ok: true };
   }
 
@@ -1267,7 +1683,7 @@ class GameManager {
     drawing.guessed = {};
     drawing.strokes = [];
     room.state = GAME_STATES.QUESTION;
-    room.deadline = Date.now() + Math.max(this.roundDurationMs(room), 30000);
+    room.deadline = Date.now() + Math.max(this.roundDurationMs(room), 60000);
 
     const common = {
       mode: "drawing", roundNumber: room.roundIndex + 1, totalRounds: room.totalRounds,
@@ -1282,7 +1698,7 @@ class GameManager {
       if (current?.drawing && this.mode(current) === "drawing" && current.state === GAME_STATES.QUESTION) {
         this.finishDrawingRound(current);
       }
-    }, Math.max(this.roundDurationMs(room), 30000)));
+    }, Math.max(this.roundDurationMs(room), 60000)));
   }
 
   drawingStroke(room, socketId, stroke) {
@@ -1400,10 +1816,10 @@ class GameManager {
     const pos = room.pushy.positions?.[socketId];
     if (!pos || room.pushy.outcomes[socketId]) return { ok: true };
     const now = Date.now();
-    if (now - pos.updatedAt < 65) return { ok: true };
+    if (now - pos.updatedAt < 45) return { ok: true };
     const x = Number(raw.x), y = Number(raw.y), vx = Number(raw.vx), vy = Number(raw.vy);
     if (![x, y, vx, vy].every(Number.isFinite)) return { ok: false, error: "Invalid position." };
-    pos.x = Math.max(60, Math.min(660, x));
+    pos.x = Math.max(10, Math.min(660, x));
     pos.y = Math.max(25, Math.min(415, y));
     pos.vx = Math.max(-500, Math.min(500, vx));
     pos.vy = Math.max(-500, Math.min(500, vy));
@@ -1459,26 +1875,59 @@ class GameManager {
 
   // ---- shared survival arena (color floor, vanishing grid, bomb pass) -------
 
+  makeRunnerCourse(seed) {
+    // Small seeded generator: courses differ each round but every player in the
+    // room receives the identical obstacle and reward layout.
+    let value=(seed>>>0)||1;
+    const random=()=>((value=Math.imul(value,1664525)+1013904223>>>0)/4294967296);
+    const obstacles=[],coins=[],platforms=[];
+    let x=650;
+    for(let section=0;section<48;section++){
+      x+=205+Math.floor(random()*145);
+      const roll=random();
+      const type=roll<.14?"hanging":roll<.38?"bramble":roll<.62?"crystal":"stump";
+      obstacles.push({x,w:18+Math.floor(random()*15),h:26+Math.floor(random()*28),type});
+      // Some sections offer a rewarding upper route, reachable with one normal jump.
+      if(section>1&&section%5===Math.floor(random()*5)){
+        const y=205+Math.floor(random()*48),w=135+Math.floor(random()*70),px=x+130;
+        platforms.push({x:px,y,w});
+        for(let c=-1;c<=1;c++)coins.push({x:px+c*38,y:y-28});
+      }else{
+        const count=2+Math.floor(random()*4),arc=random()<.45;
+        for(let c=0;c<count;c++)coins.push({x:x+72+c*32,y:arc?286-Math.sin(c/(Math.max(1,count-1))*Math.PI)*58:284});
+      }
+    }
+    return {obstacles,coins,platforms,theme:["moonwood","sunset","crystal","storm"][seed%4],seed};
+  }
+
   beginArenaRound(room, mode) {
     const players = this.roomManager.connectedPlayers(room);
     const now = Date.now();
-    const duration = mode === "bombpass" ? 30000 : mode === "fire" ? 60000 : mode === "racing" ? 75000 : mode === "flappy" ? 45000 : mode === "pong" ? 60000 : 26000;
+    const runnerCourse=mode==="runner"?this.makeRunnerCourse((now^room.roundIndex*2654435761^room.code.split("").reduce((n,c)=>n+c.charCodeAt(0),0))>>>0):null;
+    const duration = mode === "bombpass" ? 30000 : mode === "fire" ? 60000 : mode === "racing" ? 75000 : ["flappy","runner"].includes(mode) ? 600000 : mode === "painter" ? 42000 : mode === "pong" ? 60000 : mode === "vanish" ? 45000 : mode === "colorfloor" ? 70000 : 26000;
     // Vanishing Grid: pick a "map" (grid pattern + shape) for this round.
     const vmap = mode === "vanish" ? VanishMaps.pickVMap(now) : null;
+    const raceTrack=mode==="racing"?this.pickRandomDifferent(RACE_TRACKS,room.lastRaceTrackId):null;
+    if(raceTrack)room.lastRaceTrackId=raceTrack.id;
     room.arena = {
-      mode, startedAt: now, deadline: now + duration, positions: {}, eliminated: {},
+      mode, instanceId:`${now}-${room.roundIndex}-${mode}`, startedAt: now, deadline: now + duration, positions: {}, eliminated: {},
       tiles: {}, cycle: -1, safeColor: 0, holderId: null, explodeAt: null,
       previousHolderId: null, passLockedUntil: 0, tileLayout: [],
       colorDangerAt: 0, colorScrambleUntil: 0, bumpCooldowns: {},
       mapId: vmap ? vmap.id : mode === "fire" ? ["classic","fortress","switchback"][room.roundIndex % 3] : null,
       bombs: [], blasts: [], crates: [], powerups: [], upgrades: {}, finished: {}, finishOrder: [],
-      obstacles: mode==="flappy"?Array.from({length:28},(_,i)=>({
+      obstacles: mode==="flappy"?Array.from({length:40},(_,i)=>({
         x:560+i*185,gapY:115+((i*83+room.roundIndex*47)%210),gap:Math.max(92,126-i)
-      })):[],
+      })):runnerCourse?.obstacles||[],
+      runnerCoins:runnerCourse?.coins||[],runnerPlatforms:runnerCourse?.platforms||[],
+      runnerTheme:runnerCourse?.theme||null,runnerSeed:runnerCourse?.seed||0,
+      painterCols:18,painterRows:11,painterTerritory:{},painterTrails:{},painterSpawns:{},
+      painterBuckets:[],painterNextBucketAt:mode==="painter"?now+3500:0,painterBucketId:0,
       balls:mode==="pong"?[{id:1,x:360,y:220,vx:175,vy:115}]:[],
       lives:{},playerSides:{},pongSides:mode==="pong"?(players.length===2?4:Math.max(3,players.length)):0,
       nextBallAt:mode==="pong"?now+9000:0,
-      trackId: mode==="racing"?RACE_TRACKS[room.roundIndex%RACE_TRACKS.length].id:null
+      trackId:raceTrack?.id||null,raceMaxSpeed:mode==="racing"?255:0,
+      fireShrinkLevel:0,fireNextShrinkAt:mode==="fire"?now+38000:0,fireWarnedLevel:0
     };
     if (mode === "fire") {
       const safe = new Set(["1:1","1:2","2:1","11:7","11:6","10:7","11:1","11:2","10:1","1:7","1:6","2:7"]);
@@ -1496,9 +1945,15 @@ class GameManager {
         [x,y]=starts[index%starts.length];
       }
       if(mode==="flappy"){x=150;y=205+(index%4)*12;}
+      if(mode==="runner"){x=135;y=326;}
+      if(mode==="painter"){
+        const starts=[[100,80],[620,360],[620,80],[100,360],[360,80],[360,360]];
+        [x,y]=starts[index%starts.length];
+      }
       if(mode==="pong"){
         room.arena.lives[p.id]=3;
-        room.arena.playerSides[p.id]=Math.floor(index*room.arena.pongSides/players.length);
+        const rotated=(index+room.roundIndex)%players.length;
+        room.arena.playerSides[p.id]=Math.floor(rotated*room.arena.pongSides/players.length);
       }
       if (mode === "racing") {
         const track=RACE_TRACKS.find((item)=>item.id===room.arena.trackId)||RACE_TRACKS[0];
@@ -1515,9 +1970,17 @@ class GameManager {
       if (vmap) { const s = VanishMaps.snapPresent(vmap.mask, x, y); x = s[0]; y = s[1]; } // spawn on a solid tile
       room.arena.positions[p.id] = {
         x, y, vx: 0, vy: 0, updatedAt: 0, jumpUntil: 0, jumpCooldownUntil: 0, layer: 0,
-        angle: mode==="racing"?spawnAngle:null, lap:0, checkpoint:0,paddleT:.5
+        angle: mode==="racing"?spawnAngle:null, lap:0, checkpoint:0,paddleT:.5,
+        spawnX:mode==="racing"?x:null,spawnY:mode==="racing"?y:null,spawnAngle:mode==="racing"?spawnAngle:null,
+        distance:0,coins:0,collectedCoins:{},rolling:false,perfects:0,boostUntil:0,groundY:326,grounded:true
       };
       room.arena.upgrades[p.id]={range:2,bombs:1,speed:0};
+      if(mode==="painter"){
+        const col=Math.max(1,Math.min(16,Math.floor(x/40))),row=Math.max(1,Math.min(9,Math.floor(y/40)));
+        room.arena.painterSpawns[p.id]={x:col*40+20,y:row*40+20};room.arena.painterTrails[p.id]=[];
+        room.arena.positions[p.id].x=col*40+20;room.arena.positions[p.id].y=row*40+20;
+        for(let rr=row-1;rr<=row+1;rr++)for(let cc=col-1;cc<=col+1;cc++)room.arena.painterTerritory[`${cc}:${rr}`]=p.id;
+      }
     });
     if (mode === "bombpass" && players.length) {
       room.arena.holderId = players[Math.floor(Math.random() * players.length)].id;
@@ -1529,21 +1992,64 @@ class GameManager {
     this.armArenaTick(room);
   }
 
+  /**
+   * Slim per-player state for the pong tick, which fires ~18x a second.
+   *
+   * Sending the full arenaPublic() players here cost ~3.7KB per tick — around
+   * 520 KB/s for an eight-player room — because each entry carried 25 fields,
+   * most of them belonging to other minigames (lap, checkpoint, coins,
+   * painterSpeedUntil...). The renderer reads four. Stable fields like name and
+   * avatar arrive once in arena:start and are merged client-side, so they do
+   * not need repeating every frame.
+   */
+  pongPlayers(room) {
+    const a = room.arena;
+    // Rounded: "360.48291015625" and "360.5" render identically, but the first
+    // costs 12 extra bytes 18 times a second for every player.
+    const r1 = (n) => (Number.isFinite(n) ? Math.round(n * 10) / 10 : n);
+    const r3 = (n) => (Number.isFinite(n) ? Math.round(n * 1000) / 1000 : n);
+    return this.roomManager.connectedPlayers(room).map((p) => {
+      const pos = a.positions[p.id] || {};
+      return {
+        playerId: p.id,
+        x: r1(pos.x), y: r1(pos.y),
+        paddleT: r3(pos.paddleT),
+        lives: a.lives[p.id],
+        eliminated: !!a.eliminated[p.id]
+      };
+    });
+  }
+
+  /** Ball state, rounded for the same reason as pongPlayers. */
+  pongBalls(room) {
+    const r1 = (n) => (Number.isFinite(n) ? Math.round(n * 10) / 10 : n);
+    return (room.arena.balls || []).map((b) => ({
+      id: b.id, x: r1(b.x), y: r1(b.y), vx: r1(b.vx), vy: r1(b.vy)
+    }));
+  }
+
   arenaPublic(room) {
     const a = room.arena;
     return {
-      mode: a.mode, roundNumber: room.roundIndex + 1, totalRounds: room.totalRounds,
-      deadline: a.deadline, startedAt: a.startedAt, safeColor: a.safeColor, mapId: a.mapId,
+      mode: a.mode, instanceId:a.instanceId, roundNumber: room.roundIndex + 1, totalRounds: room.totalRounds,
+      deadline: a.deadline, startedAt: a.startedAt, serverNow:Date.now(), safeColor: a.safeColor, mapId: a.mapId,
       cycle: a.cycle, holderId: a.holderId, tileLayout: a.tileLayout,
       dangerAt: a.colorDangerAt, scrambleUntil: a.colorScrambleUntil,
-      bombs: a.bombs, blasts: a.blasts, crates: a.crates, powerups:a.powerups,
-      trackId:a.trackId,obstacles:a.obstacles,balls:a.balls,pongSides:a.pongSides,playerSides:a.playerSides,lives:a.lives,
+      bombs: a.bombs, blasts: a.blasts, crates: a.crates, powerups:a.powerups,fireShrinkLevel:a.fireShrinkLevel||0,fireNextShrinkAt:a.fireNextShrinkAt||0,
+      trackId:a.trackId,raceMaxSpeed:a.raceMaxSpeed||0,obstacles:a.obstacles,runnerCoins:a.runnerCoins,runnerPlatforms:a.runnerPlatforms,
+      runnerTheme:a.runnerTheme,runnerSeed:a.runnerSeed,
+      painterCols:a.painterCols,painterRows:a.painterRows,painterTerritory:a.painterTerritory,painterTrails:a.painterTrails,
+      painterBuckets:a.painterBuckets,
+      balls:a.balls,pongSides:a.pongSides,playerSides:a.playerSides,lives:a.lives,
       players: Object.entries(a.positions).map(([id, pos]) => ({
         playerId: id, name: room.players[id]?.name, avatar: room.players[id]?.avatar,
         x: pos.x, y: pos.y, vx: pos.vx || 0, vy: pos.vy || 0, eliminated: !!a.eliminated[id],
+        grounded: !!pos.grounded, groundY: pos.groundY ?? 326,
         jumpingUntil: pos.jumpUntil || 0, layer: pos.layer || 0,
         angle: pos.angle, lap: pos.lap || 0, checkpoint: pos.checkpoint || 0, distance:pos.distance||0,
-        finished: !!a.finished[id], upgrades:a.upgrades[id],paddleT:pos.paddleT??.5,lives:a.lives[id]
+        finished: !!a.finished[id], upgrades:a.upgrades[id],paddleT:pos.paddleT??.5,lives:a.lives[id],
+        coins:pos.coins||0,perfects:pos.perfects||0,rolling:!!pos.rolling,collectedCoins:Object.keys(pos.collectedCoins||{}).map(Number)
+        ,boostUntil:pos.boostUntil||0,painterSpeedUntil:pos.painterSpeedUntil||0,painterStunnedUntil:pos.painterStunnedUntil||0
       })),
       tiles: Object.entries(a.tiles).map(([key, value]) => ({ key, ...value }))
     };
@@ -1551,7 +2057,7 @@ class GameManager {
 
   armArenaTick(room) {
     this.disarmTimer(room);
-    const tickMs = ["colorfloor","vanish","fire","racing","flappy","pong"].includes(room.arena?.mode) ? 55 : 120;
+    const tickMs = ["colorfloor","vanish","fire","racing","flappy","runner","painter","pong"].includes(room.arena?.mode) ? 55 : 120;
     this.timers.set(room.code, this.setTimer(() => {
       const current = this.roomManager.getRoom(room.code);
       if (!current || current.state !== GAME_STATES.QUESTION || !current.arena) return;
@@ -1628,6 +2134,16 @@ class GameManager {
         if (landing) pos.landFloor = -1;              // bonus consumed once you've touched down
         if (allGone) dropThrough();
       }
+    } else if(a.mode==="painter"){
+      a.painterBuckets=a.painterBuckets.filter((bucket)=>now<bucket.expiresAt);
+      if(now>=a.painterNextBucketAt&&a.painterBuckets.length<3){
+        const types=["cross","splash","burst","speed","roller","lightning"],type=types[Math.floor(Math.random()*types.length)];
+        a.painterBuckets.push({id:++a.painterBucketId,col:1+Math.floor(Math.random()*(a.painterCols-2)),row:1+Math.floor(Math.random()*(a.painterRows-2)),type,
+          orientation:type==="roller"?(Math.random()<.5?"horizontal":"vertical"):null,expiresAt:now+8500});
+        a.painterNextBucketAt=now+4500+Math.floor(Math.random()*2500);
+        this.emitRoom(room.code,"arena:painter-buckets",{buckets:a.painterBuckets});
+      }
+      if(now>=a.deadline)return this.finishArenaRound(room);
     } else if(a.mode==="pong"){
       const dt=Math.min(.06,(now-(a.physicsAt||now))/1000);a.physicsAt=now;
       if(now>=a.nextBallAt&&a.balls.length<4){
@@ -1640,52 +2156,122 @@ class GameManager {
       const sideOwners={};for(const [id,side]of Object.entries(a.playerSides))sideOwners[side]=id;
       for(const ball of a.balls){
         ball.x+=ball.vx*dt;ball.y+=ball.vy*dt;
-        let hitSide=-1,maxProjection=-Infinity,nx=0,ny=0;
-        for(let side=0;side<sides;side++){
-          const angle=-Math.PI/2+side*Math.PI*2/sides,nxx=Math.cos(angle),nyy=Math.sin(angle);
-          const projection=(ball.x-360)*nxx+(ball.y-220)*nyy;
-          if(projection>maxProjection){maxProjection=projection;hitSide=side;nx=nxx;ny=nyy;}
-        }
-        const ownerId=sideOwners[hitSide],active=ownerId&&!a.eliminated[ownerId];
-        const outward=ball.vx*nx+ball.vy*ny,tx=-ny,ty=nx;
-        const along=(ball.x-360)*tx+(ball.y-220)*ty;
-        const paddleOffset=ownerId?((a.positions[ownerId].paddleT??.5)-.5)*Math.max(35,sideLength-105):0;
-        const paddleHit=active&&Math.abs(along-paddleOffset)<52;
-        if(maxProjection>=apothem-9&&outward>0&&(!active||paddleHit)){
-          ball.vx-=2*outward*nx;ball.vy-=2*outward*ny;
+        for(let pass=0;pass<2;pass++){
+          const crossed=[];
+          for(let side=0;side<sides;side++){
+            const angle=-Math.PI/2+side*Math.PI*2/sides,nx=Math.cos(angle),ny=Math.sin(angle);
+            const projection=(ball.x-360)*nx+(ball.y-220)*ny,outward=ball.vx*nx+ball.vy*ny;
+            if(projection>=apothem-9&&outward>0)crossed.push({side,nx,ny,projection,outward,
+              score:(projection-apothem)+outward*.025});
+          }
+          if(!crossed.length)break;
+          const hit=crossed.sort((x,y)=>y.score-x.score)[0],ownerId=sideOwners[hit.side];
+          const active=ownerId&&!a.eliminated[ownerId],tx=-hit.ny,ty=hit.nx;
+          const along=(ball.x-360)*tx+(ball.y-220)*ty;
+          const paddleOffset=ownerId?((a.positions[ownerId].paddleT??.5)-.5)*Math.max(35,sideLength-105):0;
+          const paddleHit=active&&Math.abs(along-paddleOffset)<52;
+          if(active&&!paddleHit){
+            if(hit.projection<=apothem+10)break;
+            a.lives[ownerId]=Math.max(0,a.lives[ownerId]-1);
+            this.emitRoom(room.code,"arena:pong-life",{playerId:ownerId,lives:a.lives[ownerId],side:hit.side});
+            if(a.lives[ownerId]===0)this.eliminateArena(room,ownerId,"miss");
+            const angle=.8+ball.id*1.37+now%1000/1000;
+            ball.x=360;ball.y=220;ball.vx=Math.cos(angle)*185;ball.vy=Math.sin(angle)*185;
+            break;
+          }
+          ball.vx-=2*hit.outward*hit.nx;ball.vy-=2*hit.outward*hit.ny;
           if(paddleHit){
             const english=(along-paddleOffset)/52;
             ball.vx+=tx*english*75;ball.vy+=ty*english*75;
+            this.emitRoom(room.code,"arena:pong-hit",{ballId:ball.id,side:hit.side,speed:Math.hypot(ball.vx,ball.vy)});
           }
           const speed=Math.min(330,Math.hypot(ball.vx,ball.vy)*1.035);
           const length=Math.max(1,Math.hypot(ball.vx,ball.vy));ball.vx=ball.vx/length*speed;ball.vy=ball.vy/length*speed;
-          ball.x-=nx*Math.max(0,maxProjection-(apothem-10));ball.y-=ny*Math.max(0,maxProjection-(apothem-10));
-        }else if(active&&maxProjection>apothem+12){
-          a.lives[ownerId]=Math.max(0,a.lives[ownerId]-1);
-          this.emitRoom(room.code,"arena:pong-life",{playerId:ownerId,lives:a.lives[ownerId]});
-          if(a.lives[ownerId]===0)this.eliminateArena(room,ownerId,"miss");
-          const angle=.8+ball.id*1.37+now%1000/1000;
-          ball.x=360;ball.y=220;ball.vx=Math.cos(angle)*185;ball.vy=Math.sin(angle)*185;
+          ball.x-=hit.nx*Math.max(0,hit.projection-(apothem-10));
+          ball.y-=hit.ny*Math.max(0,hit.projection-(apothem-10));
         }
       }
-      this.emitRoom(room.code,"arena:pong",{balls:a.balls,lives:a.lives,players:this.arenaPublic(room).players});
+      this.emitRoom(room.code,"arena:pong",{balls:this.pongBalls(room),lives:a.lives,players:this.pongPlayers(room)});
     } else if(a.mode==="flappy"){
       const dt=Math.min(.08,(now-(a.physicsAt||now))/1000);a.physicsAt=now;
       const progress=(now-a.startedAt)*.12;
+      if(a.obstacles.at(-1).x-progress<1000){
+        const additions=Array.from({length:12},(_,offset)=>{
+          const i=a.obstacles.length+offset;
+          return {x:560+i*185,gapY:115+((i*83+room.roundIndex*47)%210),gap:Math.max(92,126-i)};
+        });
+        a.obstacles.push(...additions);
+        this.emitRoom(room.code,"arena:flappy-obstacles",{obstacles:additions});
+      }
       for(const p of alive()){
         const pos=a.positions[p.id];pos.vy=(pos.vy||0)+620*dt;pos.y+=pos.vy*dt;pos.distance=progress;
         let hit=pos.y<18||pos.y>422;
         if(!hit)for(const obstacle of a.obstacles){
           const screenX=obstacle.x-progress;
-          if(Math.abs(screenX-150)<43&&(pos.y-15<obstacle.gapY-obstacle.gap/2||pos.y+15>obstacle.gapY+obstacle.gap/2)){hit=true;break;}
+          if(Math.abs(screenX-150)<29&&(pos.y-10<obstacle.gapY-obstacle.gap/2||pos.y+10>obstacle.gapY+obstacle.gap/2)){hit=true;break;}
         }
         if(hit)this.eliminateArena(room,p.id,"popup");
+      }
+      this.emitRoom(room.code,"arena:positions",{players:this.arenaPublic(room).players,serverNow:now});
+    } else if(a.mode==="runner"){
+      const dt=Math.min(.08,(now-(a.physicsAt||now))/1000);a.physicsAt=now;
+      for(const p of alive()){
+        const pos=a.positions[p.id],oldY=pos.y;
+        const pace=Math.min(.29,.145+(now-a.startedAt)/420000+(pos.coins||0)*.0025+(now<(pos.boostUntil||0)?.025:0));
+        pos.distance=(pos.distance||0)+pace*dt*1000;
+        pos.vy=(pos.vy||0)+980*dt;pos.y+=pos.vy*dt;pos.groundY=326;pos.grounded=false;
+        // Land on a floating route only while descending through its top.
+        for(const platform of a.runnerPlatforms){
+          const sx=platform.x-pos.distance;
+          if(sx>95-platform.w/2&&sx<175+platform.w/2&&pos.vy>=0&&oldY<=platform.y&&pos.y>=platform.y){
+            pos.y=platform.y;pos.vy=0;pos.groundY=platform.y;pos.grounded=true;break;
+          }
+        }
+        if(pos.y>=326){pos.y=326;pos.vy=0;pos.grounded=true;pos.groundY=326;}
+        for(const obstacle of a.obstacles){
+          const sx=obstacle.x-pos.distance,halfW=obstacle.w/2;
+          const runnerLeft=126,runnerRight=144,runnerTop=pos.rolling?pos.y-20:pos.y-38,runnerBottom=pos.y-2;
+          const hazardTop=obstacle.type==="hanging"?245:326-obstacle.h;
+          const hazardBottom=obstacle.type==="hanging"?292:326;
+          if(runnerRight>sx-halfW&&runnerLeft<sx+halfW&&runnerBottom>hazardTop&&runnerTop<hazardBottom){
+            this.eliminateArena(room,p.id,"obstacle");break;
+          }
+          if(!pos.lastCleared||obstacle.x>pos.lastCleared){
+            if(sx+halfW<122&&sx+halfW>95&&!a.eliminated[p.id]){
+              pos.lastCleared=obstacle.x;
+              const ideal=obstacle.type==="hanging"?pos.rolling:Math.abs(pos.y-(326-obstacle.h-15))<24;
+              if(ideal){pos.perfects=(pos.perfects||0)+1;pos.boostUntil=now+1300;this.emitRoom(room.code,"arena:runner-perfect",{playerId:p.id,type:obstacle.type==="hanging"?"roll":"jump"});}
+            }
+          }
+        }
+        for(let i=0;i<a.runnerCoins.length;i++){
+          if(pos.collectedCoins[i])continue;
+          const coin=a.runnerCoins[i],sx=coin.x-pos.distance;
+          if(Math.abs(sx-135)<24&&Math.abs(coin.y-(pos.y-20))<30){
+            pos.collectedCoins[i]=true;pos.coins++;this.emitRoom(room.code,"arena:runner-coin",{playerId:p.id,index:i,coins:pos.coins});
+          }
+        }
       }
       this.emitRoom(room.code,"arena:positions",{players:this.arenaPublic(room).players});
     } else if (a.mode === "fire") {
       const exploding=a.bombs.filter((bomb)=>now>=bomb.explodeAt);
       for(const bomb of exploding)this.explodeFireBomb(room,bomb,now);
-      a.blasts=a.blasts.filter((blast)=>now<blast.until);
+      const previousBlastCount=a.blasts.length;a.blasts=a.blasts.filter((blast)=>now<blast.until);
+      if(a.blasts.length!==previousBlastCount)this.emitRoom(room.code,"arena:fire",{bombs:a.bombs,blasts:a.blasts,crates:a.crates,powerups:a.powerups,fireShrinkLevel:a.fireShrinkLevel});
+      for(const p of alive()){
+        const cell=this.fireCell(a.positions[p.id].x,a.positions[p.id].y),key=`${cell.col}:${cell.row}`;
+        if(a.blasts.some((blast)=>blast.cells.includes(key)))this.eliminateArena(room,p.id,"blast");
+      }
+      const upcomingLevel=a.fireShrinkLevel+1;
+      if(a.fireShrinkLevel<4&&now>=a.fireNextShrinkAt-4000&&a.fireWarnedLevel<upcomingLevel){a.fireWarnedLevel=upcomingLevel;this.emitRoom(room.code,"arena:fire-warning",{level:upcomingLevel,startsAt:a.fireNextShrinkAt});}
+      if(now>=a.fireNextShrinkAt&&a.fireShrinkLevel<4){
+        a.fireShrinkLevel++;a.fireNextShrinkAt=now+5500;
+        for(const p of alive()){
+          const {col,row}=this.fireCell(a.positions[p.id].x,a.positions[p.id].y);
+          if(this.fireShrunk(a,col,row))this.eliminateArena(room,p.id,"closing-fire");
+        }
+        this.emitRoom(room.code,"arena:fire",{bombs:a.bombs,blasts:a.blasts,crates:a.crates,powerups:a.powerups,fireShrinkLevel:a.fireShrinkLevel});
+      }
     } else if (a.mode === "bombpass" && now >= a.explodeAt) {
       this.eliminateArena(room, a.holderId, "exploded");
       const remaining = alive();
@@ -1700,29 +2286,42 @@ class GameManager {
     if (a.mode==="racing") {
       if (now>=a.deadline || Object.keys(a.finished).length>=this.roomManager.connectedPlayers(room).length)
         return this.finishArenaRound(room);
-    } else if(a.mode==="flappy"){
-      const count=this.roomManager.connectedPlayers(room).length;
-      if(now>=a.deadline||alive().length===0||(count>1&&alive().length<=1))return this.finishArenaRound(room);
+    } else if(["flappy","runner"].includes(a.mode)){
+      // Everyone who started gets a complete attempt. A sleeping phone must
+      // not disappear from the survivor count and prematurely finish the run.
+      if(Object.keys(a.positions).every((id)=>!!a.eliminated[id]))return this.finishArenaRound(room);
+    } else if(a.mode==="painter"){
+      if(now>=a.deadline)return this.finishArenaRound(room);
     } else if(a.mode==="pong"){
       const count=this.roomManager.connectedPlayers(room).length;
       if(now>=a.deadline||alive().length===0||(count>1&&alive().length<=1))return this.finishArenaRound(room);
+    } else if(a.mode==="fire"){
+      if(now>=a.deadline)return this.finishArenaRound(room);
+      if(alive().length<=1){
+        // Keep the arena visible long enough for the decisive blast, dropped
+        // powerups and elimination animation to be understood by everyone.
+        a.finalKillEndsAt??=now+1700;
+        if(now>=a.finalKillEndsAt)return this.finishArenaRound(room);
+      }else a.finalKillEndsAt=null;
     } else if (now >= a.deadline || alive().length <= 1) return this.finishArenaRound(room);
     this.armArenaTick(room);
   }
 
   fireCell(x,y){return {col:Math.max(0,Math.min(13,Math.floor((x-35)/50))),row:Math.max(0,Math.min(9,Math.floor((y-20)/45)))};}
   fireSolid(col,row,mapId="classic"){
-    if(col<=0||col>=13||row<=0||row>=9)return true;
+    if(col<=0||col>=12||row<=0||row>=8)return true;
     if(mapId==="fortress")return (col%3===0&&row%2===0)||(row===4&&col%4===0);
     if(mapId==="switchback")return (row%3===0&&col%2===0)||(col===6&&row%2===0);
     return col%2===0&&row%2===0;
   }
-  fireBlocked(a,x,y,radius=14){
+  fireShrunk(a,col,row){const n=a.fireShrinkLevel||0;return n>0&&(col<=n||col>=12-n||row<=n||row>=8-n);}
+  fireBlocked(a,x,y,radius=14,playerId=null){
     const minCol=Math.floor((x-radius-35)/50),maxCol=Math.floor((x+radius-35)/50);
     const minRow=Math.floor((y-radius-20)/45),maxRow=Math.floor((y+radius-20)/45);
     for(let row=minRow;row<=maxRow;row++)for(let col=minCol;col<=maxCol;col++){
       const key=`${col}:${row}`;
-      if(!this.fireSolid(col,row,a.mapId)&&!a.crates.includes(key))continue;
+      const bomb=a.bombs.some((b)=>b.col===col&&b.row===row&&!(b.ownerId===playerId&&!b.ownerExited));
+      if(!this.fireSolid(col,row,a.mapId)&&!this.fireShrunk(a,col,row)&&!a.crates.includes(key)&&!bomb)continue;
       const left=35+col*50,right=left+48,top=20+row*45,bottom=top+43;
       if(x+radius>left&&x-radius<right&&y+radius>top&&y-radius<bottom)return true;
     }
@@ -1734,7 +2333,7 @@ class GameManager {
     const cells=[`${bomb.col}:${bomb.row}`];
     for(const [dx,dy] of [[1,0],[-1,0],[0,1],[0,-1]])for(let n=1;n<=(bomb.range||2);n++){
       const col=bomb.col+dx*n,row=bomb.row+dy*n,key=`${col}:${row}`;
-      if(this.fireSolid(col,row,a.mapId))break;
+      if(this.fireSolid(col,row,a.mapId)||this.fireShrunk(a,col,row))break;
       cells.push(key);
       const crate=a.crates.indexOf(key);
       if(crate>=0){
@@ -1746,7 +2345,7 @@ class GameManager {
         break;
       }
     }
-    a.blasts.push({cells,until:now+650});
+    a.blasts.push({cells,until:now+850});
     for(const [id,pos] of Object.entries(a.positions)){
       const cell=this.fireCell(pos.x,pos.y);
       if(cells.includes(`${cell.col}:${cell.row}`))this.eliminateArena(room,id,"blast");
@@ -1765,7 +2364,7 @@ class GameManager {
     if(a.bombs.filter((b)=>b.ownerId===socketId).length>=upgrades.bombs)return {ok:true};
     const pos=a.positions[socketId],cell=this.fireCell(pos.x,pos.y),key=`${cell.col}:${cell.row}`;
     if(this.fireSolid(cell.col,cell.row,a.mapId)||a.crates.includes(key)||a.bombs.some((b)=>b.col===cell.col&&b.row===cell.row))return {ok:true};
-    a.bombs.push({ownerId:socketId,col:cell.col,row:cell.row,range:upgrades.range,explodeAt:Date.now()+2200});
+    a.bombs.push({ownerId:socketId,col:cell.col,row:cell.row,range:upgrades.range,explodeAt:Date.now()+2200,ownerExited:false});
     this.emitRoom(room.code,"arena:fire",{bombs:a.bombs,blasts:a.blasts,crates:a.crates,powerups:a.powerups});
     return {ok:true};
   }
@@ -1817,8 +2416,19 @@ class GameManager {
   eliminateArena(room, playerId, reason) {
     const a = room.arena;
     if (!playerId || a.eliminated[playerId]) return;
+    if(a.mode==="fire")this.dropFirePowerups(a,playerId);
     a.eliminated[playerId] = { reason, timeMs: Date.now() - a.startedAt };
     this.emitRoom(room.code, "arena:eliminated", { playerId, reason });
+    if(a.mode==="fire")this.emitRoom(room.code,"arena:fire",{bombs:a.bombs,blasts:a.blasts,crates:a.crates,powerups:a.powerups,fireShrinkLevel:a.fireShrinkLevel||0});
+  }
+
+  dropFirePowerups(a,playerId){
+    const u=a.upgrades[playerId]||{range:2,bombs:1,speed:0},drops=[];
+    for(let i=2;i<u.range;i++)drops.push("range");for(let i=1;i<u.bombs;i++)drops.push("bombs");for(let i=0;i<u.speed;i++)drops.push("speed");
+    const c=this.fireCell(a.positions[playerId].x,a.positions[playerId].y),spots=[[0,0],[1,0],[-1,0],[0,1],[0,-1]];
+    drops.slice(0,spots.length).forEach((type,i)=>{const col=c.col+spots[i][0],row=c.row+spots[i][1],key=`${col}:${row}`;
+      if(!this.fireSolid(col,row,a.mapId)&&!this.fireShrunk(a,col,row)&&!a.crates.includes(key)&&!a.powerups.some((p)=>p.key===key))a.powerups.push({key,type});});
+    a.upgrades[playerId]={range:2,bombs:1,speed:0};
   }
 
   arenaPosition(room, socketId, raw = {}) {
@@ -1828,22 +2438,47 @@ class GameManager {
     const a = room.arena, pos = a.positions[socketId];
     if (!pos || a.eliminated[socketId]) return { ok: true };
     const now = Date.now();
-    if (now - pos.updatedAt < 35) return { ok: true };
+    if(a.mode==="painter"&&now<(pos.painterStunnedUntil||0))return {ok:true};
+    if (now - pos.updatedAt < (a.mode==="racing"?25:35)) return { ok: true };
     if(a.mode==="pong"){
       const paddleT=Number(raw.x);if(!Number.isFinite(paddleT))return {ok:false,error:"Invalid paddle position."};
       pos.paddleT=Math.max(0,Math.min(1,paddleT));pos.updatedAt=now;
       return {ok:true};
     }
-    const x = Number(raw.x), y = Number(raw.y);
-    if (![x, y].every(Number.isFinite)) return { ok: false, error: "Invalid position." };
+    if(a.mode==="runner"){
+      pos.rolling=!!raw.roll&&pos.y>=((pos.groundY||326)-2);
+      pos.updatedAt=now;
+      return {ok:true};
+    }
+    // JSON serializes NaN/Infinity as null. Number(null) is 0, which previously
+    // turned a bad animation frame into a valid-looking teleport to (14,14).
+    if(typeof raw.x!=="number"||typeof raw.y!=="number"||!Number.isFinite(raw.x)||!Number.isFinite(raw.y))
+      return { ok: false, error: "Invalid position." };
+    const x = raw.x, y = raw.y;
     const oldX = pos.x, oldY = pos.y;
     const movementDt = pos.updatedAt ? Math.max(.035, Math.min(.2, (now - pos.updatedAt) / 1000)) : .1;
     pos.x = Math.max(14, Math.min(706, x));
     pos.y = Math.max(14, Math.min(426, y));
+    if(a.mode==="racing"){
+      // Reject stale touch packets and impossible jumps after a phone wakes.
+      // Otherwise a client can teleport to a corner, which then becomes its
+      // nearest crash-respawn location.
+      const dx=pos.x-oldX,dy=pos.y-oldY,distance=Math.hypot(dx,dy);
+      const limit=Math.max(28,520*movementDt);
+      if(distance>limit){pos.x=oldX+dx/distance*limit;pos.y=oldY+dy/distance*limit;}
+    }
     if(a.mode==="fire"){
       const nextX=pos.x,nextY=pos.y;
-      pos.x=this.fireBlocked(a,nextX,oldY)?oldX:nextX;
-      pos.y=this.fireBlocked(a,pos.x,nextY)?oldY:nextY;
+      pos.x=this.fireBlocked(a,nextX,oldY,14,socketId)?oldX:nextX;
+      pos.y=this.fireBlocked(a,pos.x,nextY,14,socketId)?oldY:nextY;
+      let bombExitChanged=false;
+      for(const bomb of a.bombs)if(bomb.ownerId===socketId&&!bomb.ownerExited){
+        const cx=35+bomb.col*50+24,cy=20+bomb.row*45+21.5;
+        // Do not turn the bomb solid until the player's entire circular body
+        // has cleared its tile. Switching on the cell boundary trapped players.
+        if(Math.abs(pos.x-cx)>38||Math.abs(pos.y-cy)>35.5){bomb.ownerExited=true;bombExitChanged=true;}
+      }
+      if(bombExitChanged)this.emitRoom(room.code,"arena:fire",{bombs:a.bombs,blasts:a.blasts,crates:a.crates,powerups:a.powerups,fireShrinkLevel:a.fireShrinkLevel||0});
       const cell=this.fireCell(pos.x,pos.y),key=`${cell.col}:${cell.row}`;
       const pickupIndex=a.powerups.findIndex((item)=>item.key===key);
       if(pickupIndex>=0){
@@ -1861,7 +2496,9 @@ class GameManager {
       const gate=track.checkpoints[pos.checkpoint];
       // Test the entire travelled segment. A fast car may cross a gate between
       // two position packets without either endpoint entering its trigger.
-      if(gate&&distanceToSegment(gate[0],gate[1],oldX,oldY,pos.x,pos.y)<92){
+      const geometry=gate?raceGateNormal(track,gate):null,{nx=0,ny=1,x:gx=0,y:gy=0}=geometry||{},half=(track.width||72)/2+10;
+      const gateCrossed=gate&&segmentsIntersect(oldX,oldY,pos.x,pos.y,gx-nx*half,gy-ny*half,gx+nx*half,gy+ny*half);
+      if(gateCrossed||gate&&distanceToSegment(gx,gy,oldX,oldY,pos.x,pos.y)<18){
         pos.checkpoint++;
         this.emitRoom(room.code,"arena:checkpoint",{
           playerId:socketId,checkpoint:pos.checkpoint,checkpointCount:track.checkpoints.length,lap:pos.lap
@@ -1876,13 +2513,48 @@ class GameManager {
         }
       }
     }
+    if(a.mode==="painter"){
+      // Sample the whole travelled segment so fast packets cannot skip a tile.
+      const samples=Math.max(1,Math.ceil(Math.hypot(pos.x-oldX,pos.y-oldY)/18));
+      for(let step=0;step<=samples;step++){
+        const t=step/samples,x=oldX+(pos.x-oldX)*t,y=oldY+(pos.y-oldY)*t;
+        const col=Math.max(0,Math.min(a.painterCols-1,Math.floor(x/40)));
+        const row=Math.max(0,Math.min(a.painterRows-1,Math.floor(y/40)));
+        a.painterTerritory[`${col}:${row}`]=socketId;
+      }
+      const playerCol=Math.max(0,Math.min(a.painterCols-1,Math.floor(pos.x/40)));
+      const playerRow=Math.max(0,Math.min(a.painterRows-1,Math.floor(pos.y/40)));
+      const bucketIndex=a.painterBuckets.findIndex((bucket)=>bucket.col===playerCol&&bucket.row===playerRow);
+      if(bucketIndex>=0){
+        const bucket=a.painterBuckets.splice(bucketIndex,1)[0],cells=[];
+        const add=(dc,dr)=>{
+          const col=bucket.col+dc,row=bucket.row+dr;
+          if(col<0||col>=a.painterCols||row<0||row>=a.painterRows)return;
+          a.painterTerritory[`${col}:${row}`]=socketId;cells.push(`${col}:${row}`);
+        };
+        if(bucket.type==="speed")pos.painterSpeedUntil=now+3500;
+        else if(bucket.type==="lightning"){
+          for(const [otherId,otherPos] of Object.entries(a.positions))if(otherId!==socketId)otherPos.painterStunnedUntil=now+2000;
+        }
+        else if(bucket.type==="roller"){
+          if(bucket.orientation==="vertical")for(let row=0;row<a.painterRows;row++){a.painterTerritory[`${bucket.col}:${row}`]=socketId;cells.push(`${bucket.col}:${row}`);}
+          else for(let col=0;col<a.painterCols;col++){a.painterTerritory[`${col}:${bucket.row}`]=socketId;cells.push(`${col}:${bucket.row}`);}
+        }
+        else if(bucket.type==="cross")for(let n=-2;n<=2;n++){add(n,0);add(0,n);}
+        else if(bucket.type==="splash")for(let dr=-1;dr<=1;dr++)for(let dc=-1;dc<=1;dc++)add(dc,dr);
+        else for(let dr=-2;dr<=2;dr++)for(let dc=-2;dc<=2;dc++)if(Math.abs(dc)+Math.abs(dr)<=3)add(dc,dr);
+        this.emitRoom(room.code,"arena:painter-bucket",{playerId:socketId,type:bucket.type,cells,buckets:a.painterBuckets});
+        this.emitRoom(room.code,"arena:painter-buckets",{buckets:a.painterBuckets});
+      }
+      this.emitRoom(room.code,"arena:painter",{territory:a.painterTerritory,trails:a.painterTrails,players:this.arenaPublic(room).players});
+    }
     pos.vx = Math.max(-350, Math.min(350, (pos.x - oldX) / movementDt));
     pos.vy = Math.max(-350, Math.min(350, (pos.y - oldY) / movementDt));
     // Resolve overlapping bodies on the server so every client converges on
     // the same playful bump rather than rendering players inside one another.
     for (const [otherId, other] of Object.entries(a.positions)) {
       if (otherId === socketId || a.eliminated[otherId] ||
-          (other.layer || 0) !== (pos.layer || 0)) continue;
+          a.mode === "fire" || (other.layer || 0) !== (pos.layer || 0)) continue;
       const dx = pos.x - other.x, dy = pos.y - other.y;
       const distance = Math.hypot(dx, dy), minimum = a.mode==="racing"?42:34;
       if (distance > 0 && distance < minimum &&
@@ -1904,12 +2576,12 @@ class GameManager {
             const targetId = hitterId === socketId ? otherId : socketId;
             const rvx=(pos.vx||0)-(other.vx||0),rvy=(pos.vy||0)-(other.vy||0);
             const closing=Math.max(0,-(rvx*nx+rvy*ny));
-            const bounce=Math.min(190,Math.max(38,closing*.82+overlap*5));
+            const bounce=Math.min(250,Math.max(55,closing*1.08+overlap*7));
             const posImpulse={x:nx*bounce,y:ny*bounce};
             const otherImpulse={x:-nx*bounce,y:-ny*bounce};
             this.emitRoom(room.code, "arena:bump", {
               hitterId, targetId,
-              intensity: Math.max(.25, Math.min(1, bounce / 170)),
+              intensity: Math.max(.3, Math.min(1, bounce / 220)),
               nx: hitterId===socketId?-nx:nx, ny:hitterId===socketId?-ny:ny,
               racing:a.mode==="racing",
               impulses:a.mode==="racing"?{[socketId]:posImpulse,[otherId]:otherImpulse}:undefined
@@ -1946,9 +2618,15 @@ class GameManager {
       }
     }
     this.emitRoom(room.code, "arena:positions", {
-      players: this.arenaPublic(room).players, holderId: a.holderId
+      players: this.arenaPublic(room).players, holderId: a.holderId, serverNow:now
     });
     return { ok: true };
+  }
+
+  resetPainterPlayer(arena,playerId){
+    arena.painterTrails[playerId]=[];
+    const spawn=arena.painterSpawns[playerId],pos=arena.positions[playerId];
+    if(spawn&&pos){pos.x=spawn.x;pos.y=spawn.y;pos.vx=0;pos.vy=0;}
   }
 
   arenaJump(room, socketId) {
@@ -1957,10 +2635,23 @@ class GameManager {
     }
     const pos = room.arena.positions[socketId], now = Date.now();
     if (!pos || room.arena.eliminated[socketId]) return { ok: true };
+    if(room.arena.mode==="racing"){
+      this.emitRoom(room.code,"arena:horn",{playerId:socketId});
+      return {ok:true};
+    }
     if(room.arena.mode==="flappy"){
       if(now<(pos.jumpCooldownUntil||0))return {ok:true};
       pos.vy=-285;pos.jumpCooldownUntil=now+105;
       this.emitRoom(room.code,"arena:flap",{playerId:socketId,vy:pos.vy});
+      return {ok:true};
+    }
+    if(room.arena.mode==="runner"){
+      // A floating platform is solid ground too. The previous y<324 check
+      // rejected a jump immediately after landing on one, leaving the client
+      // predicting a different state from the server.
+      if(now<(pos.jumpCooldownUntil||0)||!pos.grounded)return {ok:true};
+      pos.vy=-420;pos.grounded=false;pos.jumpCooldownUntil=now+180;
+      this.emitRoom(room.code,"arena:jumped",{playerId:socketId,jumpingUntil:now+650});
       return {ok:true};
     }
     if (now < (pos.jumpCooldownUntil || 0)) return { ok: true };
@@ -1973,6 +2664,17 @@ class GameManager {
   finishArenaRound(room) {
     this.disarmTimer(room);
     const a = room.arena, duration = a.deadline - a.startedAt;
+    if(a.mode==="painter"){
+      const total=a.painterCols*a.painterRows;
+      const ranking=this.roomManager.connectedPlayers(room).map((p)=>{
+        const cells=Object.values(a.painterTerritory).filter((id)=>id===p.id).length;
+        return {playerId:p.id,name:p.name,avatar:p.avatar,cells,percent:Math.round(cells/total*1000)/10};
+      }).sort((x,y)=>y.cells-x.cells);
+      ranking.forEach((entry,index)=>{entry.pointsAwarded=[100,60,30,10][index]||10;room.players[entry.playerId].score+=entry.pointsAwarded;entry.totalScore=room.players[entry.playerId].score;});
+      room.state=GAME_STATES.RESULTS;room.deadline=null;
+      const payload={mode:a.mode,ranking,roundNumber:room.roundIndex+1,totalRounds:room.totalRounds,isFinalRound:room.roundIndex+1>=room.totalRounds};
+      room.lastResults=payload;this.emitRoom(room.code,"round:results",payload);return;
+    }
     if(a.mode==="racing"){
       const checkpointCount=(RACE_TRACKS.find((track)=>track.id===a.trackId)||RACE_TRACKS[0]).checkpoints.length;
       const ranking=this.roomManager.connectedPlayers(room).map((p)=>{
@@ -1991,10 +2693,26 @@ class GameManager {
         isFinalRound:room.roundIndex+1>=room.totalRounds};
       room.lastResults=payload;this.emitRoom(room.code,"round:results",payload);return;
     }
+    if(["flappy","runner"].includes(a.mode)){
+      const ranking=this.roomManager.connectedPlayers(room).map((p)=>{
+        const out=a.eliminated[p.id],distance=Math.floor((a.positions[p.id]?.distance||0)/10);
+        return {playerId:p.id,name:p.name,avatar:p.avatar,survived:!out,
+          timeMs:out?.timeMs??Math.min(duration,Date.now()-a.startedAt),reason:out?.reason,distance};
+      }).sort((x,y)=>y.distance-x.distance||y.timeMs-x.timeMs);
+      ranking.forEach((entry,index)=>{
+        entry.pointsAwarded=[100,60,30,10][index]||10;
+        room.players[entry.playerId].score+=entry.pointsAwarded;
+        entry.totalScore=room.players[entry.playerId].score;
+      });
+      room.state=GAME_STATES.RESULTS;room.deadline=null;
+      const payload={mode:a.mode,ranking,survivors:ranking.filter((p)=>p.survived).length,
+        roundNumber:room.roundIndex+1,totalRounds:room.totalRounds,isFinalRound:room.roundIndex+1>=room.totalRounds};
+      room.lastResults=payload;this.emitRoom(room.code,"round:results",payload);return;
+    }
     const ranking = this.roomManager.connectedPlayers(room).map((p) => {
       const out = a.eliminated[p.id];
       const survived = !out;
-      const timeMs = a.mode==="flappy"
+      const timeMs = ["flappy","runner"].includes(a.mode)
         ? (out?.timeMs ?? Math.min(duration,Date.now()-a.startedAt))
         : (survived ? duration : out.timeMs);
       const pointsAwarded = survived ? 100 : Math.max(10, Math.round(60 * timeMs / duration));
@@ -2002,7 +2720,7 @@ class GameManager {
       return {
         playerId: p.id, name: p.name, avatar: p.avatar, survived, timeMs,
         reason: out?.reason, pointsAwarded, totalScore: p.score,
-        distance:a.mode==="flappy"?Math.floor((a.positions[p.id]?.distance||0)/10):undefined
+        distance:["flappy","runner"].includes(a.mode)?Math.floor((a.positions[p.id]?.distance||0)/10):undefined
       };
     }).sort((x, y) => Number(y.survived) - Number(x.survived) || y.timeMs - x.timeMs);
     room.state = GAME_STATES.RESULTS;
@@ -2019,50 +2737,40 @@ class GameManager {
   // ---- choose a door --------------------------------------------------------
 
   beginDoorsRound(room) {
-    const hearts = {};
-    const positions = {};
-    this.roomManager.connectedPlayers(room).forEach((p, index) => {
-      hearts[p.id] = 2;
-      positions[p.id] = { x: 180 + (index % 4) * 120, y: 390, updatedAt: 0 };
+    const now=Date.now(),positions={};this.roomManager.connectedPlayers(room).forEach((p,index)=>{
+      positions[p.id]={x:330+(index%4)*20,y:1400,updatedAt:0};
     });
-    room.doors = { stage: 1, hearts, choices: {}, eliminated: {}, handicaps: {}, positions: {} };
-    room.doors.positions = positions;
-    room.state = GAME_STATES.QUESTION;
-    this.beginDoorStage(room);
+    const routeSets=[];for(let stage=0;stage<32;stage++){const routes=["straight","small","big"];for(let i=routes.length-1;i>0;i--){const j=Math.floor(this.random()*(i+1));[routes[i],routes[j]]=[routes[j],routes[i]];}routeSets.push(routes);}
+    room.doors={positions,choices:{},revealed:{},stageByPlayer:{},routeSets,routes:routeSets[0],botTargets:{},eliminated:{},finished:{},finishOrder:[],startedAt:now,deadline:now+90000,fireY:1700,fireSpeed:122,runSpeed:182,endingAt:0};
+    this.roomManager.connectedPlayers(room).forEach((p)=>{room.doors.stageByPlayer[p.id]=0;});
+    const d=room.doors;
+    room.deadline = d.deadline;
+    room.state=GAME_STATES.QUESTION;
+    this.emitRoom(room.code, "doors:choose", this.doorsPublic(room));
+    this.armDoorsTick(room);
   }
 
-  beginDoorStage(room) {
-    const d = room.doors;
-    d.choices = {};
-    d.botTargets = {};
-    Object.entries(d.positions).forEach(([id, pos], index) => {
-      pos.y = 390; pos.x = 180 + (index % 4) * 120; pos.updatedAt = 0;
-    });
-    const effects = ["safe", "damage", "inconvenience", "eliminate"];
-    for (let i = effects.length - 1; i; i--) {
-      const j = Math.floor(Math.random() * (i + 1));
-      [effects[i], effects[j]] = [effects[j], effects[i]];
-    }
-    d.effects = effects;
-    d.deadline = Date.now() + 7500;
-    room.deadline = d.deadline;
-    this.emitRoom(room.code, "doors:choose", this.doorsPublic(room));
-    this.disarmTimer(room);
-    this.timers.set(room.code, this.setTimer(() => {
-      const current = this.roomManager.getRoom(room.code);
-      if (current?.doors && current.state === GAME_STATES.QUESTION) this.revealDoors(current);
-    }, 7500));
+  armDoorsTick(room){this.disarmTimer(room);this.timers.set(room.code,this.setTimer(()=>{const current=this.roomManager.getRoom(room.code);if(current?.state===GAME_STATES.QUESTION&&this.mode(current)==="doors")this.tickDoors(current);},55));}
+  tickDoors(room){
+    const d=room.doors,now=Date.now(),seconds=(now-d.startedAt)/1000;d.runSpeed=182+Math.min(68,seconds*1.55);d.fireSpeed=122+seconds*2;d.fireY=1700-122*seconds-seconds*seconds;
+    const runners=this.roomManager.connectedPlayers(room).filter((p)=>!d.eliminated[p.id]&&!d.finished[p.id]);
+    const caught=runners.filter((p)=>d.positions[p.id]?.y>=d.fireY).sort((a,b)=>d.positions[b.id].y-d.positions[a.id].y);
+    for(const p of caught){const remaining=this.roomManager.connectedPlayers(room).filter((q)=>!d.eliminated[q.id]&&!d.finished[q.id]).length;if(remaining<=1)break;this.eliminateDoorRunner(room,p.id,"fire");}
+    this.emitRoom(room.code,"doors:positions",{players:this.doorsPublic(room).players,fireY:d.fireY,serverNow:now});
+    const active=this.roomManager.connectedPlayers(room).filter((p)=>!d.eliminated[p.id]&&!d.finished[p.id]);
+    if(active.length<=1){d.endingAt||=now+1300;if(now>=d.endingAt)return this.finishDoorsRound(room);}else d.endingAt=0;this.armDoorsTick(room);
   }
+
+  eliminateDoorRunner(room,id,reason){const d=room.doors;if(d.eliminated[id]||d.finished[id])return;d.eliminated[id]={reason,timeMs:Date.now()-d.startedAt};this.emitRoom(room.code,"doors:eliminated",{playerId:id,reason});}
 
   doorsPublic(room, reveal = false) {
     const d = room.doors;
     return {
-      mode: "doors", stage: d.stage, maxStages: 3, deadline: d.deadline,
+      mode: "doors", deadline: d.deadline, startedAt:d.startedAt, fireY:d.fireY,fireSpeed:d.fireSpeed,runSpeed:d.runSpeed,
       roundNumber: room.roundIndex + 1, totalRounds: room.totalRounds,
-      effects: reveal ? d.effects : undefined,
       players: this.roomManager.connectedPlayers(room).map((p) => ({
-        playerId: p.id, name: p.name, avatar: p.avatar, hearts: d.hearts[p.id],
-        eliminated: !!d.eliminated[p.id], choice: reveal ? d.choices[p.id] : undefined,
+        playerId: p.id, name: p.name, avatar: p.avatar,
+        eliminated: !!d.eliminated[p.id], finished:!!d.finished[p.id], choice:d.choices[p.id],stage:d.stageByPlayer[p.id]||0,
         x: d.positions[p.id]?.x, y: d.positions[p.id]?.y
       }))
     };
@@ -2072,14 +2780,13 @@ class GameManager {
     if (!room || this.mode(room) !== "doors" || room.state !== GAME_STATES.QUESTION || !room.doors) {
       return { ok: false, error: "The doors are not open right now." };
     }
-    if (room.doors.eliminated[socketId]) return { ok: false, error: "You are out this round." };
+    if (room.doors.eliminated[socketId]||room.doors.finished[socketId]) return { ok: false, error: "Your run is over." };
     const index = Number(rawIndex);
-    if (!Number.isInteger(index) || index < 0 || index > 3) return { ok: false, error: "Choose a valid door." };
+    if (!Number.isInteger(index) || index < 0 || index > 2) return { ok: false, error: "Choose a valid door." };
+    if(Number.isInteger(room.doors.choices[socketId]))return{ok:true};
+    const stage=room.doors.stageByPlayer[socketId]||0;
     room.doors.choices[socketId] = index;
-    this.emitSocket(socketId, "doors:selected", { doorIndex: index });
-    const active = this.roomManager.connectedPlayers(room).filter((p) => !room.doors.eliminated[p.id]);
-    this.emitRoom(room.code, "doors:progress", { chosen: Object.keys(room.doors.choices).length, total: active.length });
-    if (active.every((p) => Number.isInteger(room.doors.choices[p.id]))) this.revealDoors(room);
+    this.emitSocket(socketId, "doors:selected", { doorIndex: index,stage });
     return { ok: true };
   }
 
@@ -2088,66 +2795,48 @@ class GameManager {
       return { ok: false, error: "Not running for a door right now." };
     }
     const d = room.doors, pos = d.positions[socketId];
-    if (!pos || d.eliminated[socketId] || Number.isInteger(d.choices[socketId])) return { ok: true };
+    if (!pos || d.eliminated[socketId] || d.finished[socketId]) return { ok: true };
     const now = Date.now();
     if (now - pos.updatedAt < 35) return { ok: true };
     const x = Number(raw.x), y = Number(raw.y);
     if (![x, y].every(Number.isFinite)) return { ok: false, error: "Invalid position." };
-    pos.x = Math.max(18, Math.min(702, x));
-    pos.y = Math.max(45, Math.min(410, y));
+    const elapsed=pos.updatedAt?Math.max(.035,(now-pos.updatedAt)/1000):.12,maxStep=250*elapsed+12;
+    let nx=pos.x+Math.max(-maxStep,Math.min(maxStep,x-pos.x)),ny=pos.y-(d.runSpeed||182)*elapsed;
+    nx=Math.max(113,Math.min(607,nx));ny=Math.min(1430,ny);
+    const stage=d.stageByPlayer[socketId]||0,split=1050-stage*1050;
+    if(!Number.isInteger(d.choices[socketId])&&ny<=split)this.chooseDoor(room,socketId,Math.max(0,Math.min(2,Math.floor((nx-105)/170))));
+    const choice=d.choices[socketId];
+    if(Number.isInteger(choice)){
+      const left=113+choice*170,right=267+choice*170;nx=Math.max(left,Math.min(right,nx));const route=(d.routeSets[stage]||d.routeSets[d.routeSets.length-1])[choice];
+      if(!d.revealed[socketId]&&ny<=split-180){d.revealed[socketId]=true;this.emitSocket(socketId,"doors:route-revealed",{route,stage});}
+      if(route==="small"&&pos.y>=split-490&&ny<split-490&&nx>left+72)ny=split-490;
+      if(route==="big"){
+        if(pos.y>=split-350&&ny<split-350&&nx>left+56)ny=split-350;
+        if(pos.y>=split-670&&ny<split-670&&nx<right-56)ny=split-670;
+      }
+      if(ny<=split-780){d.stageByPlayer[socketId]=stage+1;delete d.choices[socketId];delete d.revealed[socketId];delete d.botTargets[socketId];this.emitSocket(socketId,"doors:next-choice",{stage:stage+1});}
+    }
+    pos.x=nx;pos.y=ny;
     pos.updatedAt = now;
     this.emitRoom(room.code, "doors:positions", {
       players: this.doorsPublic(room, false).players
     });
-    if (pos.y <= 92) {
-      const doorIndex = Math.max(0, Math.min(3, Math.floor(pos.x / 180)));
-      return this.chooseDoor(room, socketId, doorIndex);
-    }
+    if(pos.y>=d.fireY&&this.roomManager.connectedPlayers(room).filter((p)=>!d.eliminated[p.id]&&!d.finished[p.id]).length>1)this.eliminateDoorRunner(room,socketId,"fire");
     return { ok: true };
-  }
-
-  revealDoors(room) {
-    this.disarmTimer(room);
-    const d = room.doors;
-    for (const p of this.roomManager.connectedPlayers(room)) {
-      if (d.eliminated[p.id]) continue;
-      let choice = Number.isInteger(d.choices[p.id]) ? d.choices[p.id] : Math.floor(Math.random() * 4);
-      if (d.handicaps[p.id]) {
-        choice = (choice + 1) % 4;
-        d.choices[p.id] = choice;
-        delete d.handicaps[p.id];
-      }
-      d.choices[p.id] = choice;
-      const effect = d.effects[choice];
-      if (effect === "eliminate") d.eliminated[p.id] = true;
-      if (effect === "inconvenience") d.handicaps[p.id] = true;
-      if (effect === "damage") {
-        d.hearts[p.id] -= 1;
-        if (d.hearts[p.id] <= 0) d.eliminated[p.id] = true;
-      }
-    }
-    this.emitRoom(room.code, "doors:reveal", this.doorsPublic(room, true));
-    const alive = this.roomManager.connectedPlayers(room).filter((p) => !d.eliminated[p.id]);
-    if (d.stage >= 3 || alive.length <= 1) {
-      this.timers.set(room.code, this.setTimer(() => this.finishDoorsRound(room), 3000));
-    } else {
-      d.stage += 1;
-      this.timers.set(room.code, this.setTimer(() => this.beginDoorStage(room), 3000));
-    }
   }
 
   finishDoorsRound(room) {
     this.disarmTimer(room);
     const d = room.doors;
     const ranking = this.roomManager.connectedPlayers(room).map((p) => {
-      const survived = !d.eliminated[p.id];
-      const pointsAwarded = survived ? 100 + d.hearts[p.id] * 15 : 25;
+      const finish=d.finished[p.id],survived=!d.eliminated[p.id];
+      const pointsAwarded=survived?100:Math.max(10,Math.round(60*(d.eliminated[p.id]?.timeMs||0)/Math.max(1,Date.now()-d.startedAt)));
       p.score += pointsAwarded;
       return {
         playerId: p.id, name: p.name, avatar: p.avatar, survived,
-        hearts: d.hearts[p.id], pointsAwarded, totalScore: p.score
+        place:finish?.place,timeMs:finish?.timeMs,reason:d.eliminated[p.id]?.reason,pointsAwarded,totalScore:p.score
       };
-    }).sort((a, b) => Number(b.survived) - Number(a.survived) || b.hearts - a.hearts);
+    }).sort((a,b)=>Number(b.survived)-Number(a.survived)||(a.place||99)-(b.place||99)||b.timeMs-a.timeMs);
     room.state = GAME_STATES.RESULTS;
     room.deadline = null;
     const payload = {
@@ -2173,39 +2862,40 @@ class GameManager {
       selections: {},
       cursors: {},
       pool: {},
-      removableTiles: {}
+      removableTiles: {},
+      crumbledTiles: {}
     };
   }
 
   platformerMaps() {
     const make=(id,name,emoji,description,theme,platforms)=>{
-      const cols=24,rows=14,tile=40,tiles={};
+      const cols=30,rows=14,tile=40,tiles={};
       const solid=(c,r)=>{tiles[`${c},${r}`]="solid";};
       for(let c=0;c<=4;c++)for(let r=11;r<=13;r++)solid(c,r);
-      for(let c=20;c<=23;c++)for(let r=11;r<=13;r++)solid(c,r);
+      for(let c=26;c<=29;c++)for(let r=11;r<=13;r++)solid(c,r);
       platforms.forEach(([c,r,w=1,type="solid"])=>{for(let i=0;i<w;i++)tiles[`${c+i},${r}`]=type;});
       return {
         id,name,emoji,description,
-        level:{cols,rows,tile,tiles,theme,spawn:{x:2.5*tile,y:10*tile},goal:{x0:20*tile,x1:24*tile,y:11*tile}}
+        level:{cols,rows,tile,tiles,theme,spawn:{x:2.5*tile,y:10*tile},goal:{x0:26*tile,x1:30*tile,y:11*tile}}
       };
     };
     return [
       make("skybridge","Skybridge","☁️","Sparse cloud islands climb high above the world.",
         {id:"sky",skyTop:"#38bdf8",skyBottom:"#dbeafe",void:"#3730a3"},
-        [[7,10,1],[9,8,2],[13,6,1],[16,8,2],[19,10,1]]),
+        [[7,10,1],[10,8,2],[15,6,1],[20,8,2],[25,10,1]]),
       make("canyon","Canyon Run","🏜️","A broad low route over unstable desert ledges.",
         {id:"canyon",skyTop:"#fb923c",skyBottom:"#fde68a",void:"#7c2d12"},
-        [[6,11,3,"crumble"],[10,10,4],[15,11,4,"crumble"]]),
+        [[6,11,4,"crumble"],[11,10,5],[17,11,4,"crumble"],[22,9,3]]),
       make("zigzag","Neon Zigzag","⚡","Slippery ledges and bounce pads force a sharp zigzag.",
         {id:"neon",skyTop:"#111827",skyBottom:"#312e81",void:"#020617"},
-        [[6,9,2,"ice"],[9,7,1,"bouncy"],[12,9,2,"ice"],[15,7,2],[18,9,1,"bouncy"]])
+        [[6,9,2,"ice"],[10,7,1,"bouncy"],[14,9,2,"ice"],[18,7,2],[22,9,1,"bouncy"],[25,8,1]])
     ];
   }
 
   publicPlatformerMaps(room) {
     return room.platformer.maps.map((m)=>({
       id:m.id,name:m.name,emoji:m.emoji,description:m.description,
-      theme:m.level.theme,
+      theme:m.level.theme,cols:m.level.cols,rows:m.level.rows,
       preview:Object.entries(m.level.tiles).map(([key,type])=>[...key.split(",").map(Number),type])
     }));
   }
@@ -2413,6 +3103,7 @@ class GameManager {
       return { ok: false, error: "Off the grid." };
     }
     if (!this.platformerHand().includes(type)) return { ok: false, error: "Unknown tile." };
+    if (col <= 4) return { ok: false, error: "The spawn zone is protected. Build beyond the guardrail." };
     // API/test compatibility: selecting and placing can be one atomic action.
     if (!pf.selections[socketId]) {
       if ((this.platformerPoolRemaining(room)[type] || 0) < 1) {
@@ -2501,12 +3192,23 @@ class GameManager {
     pf.phase = "race";
     pf.outcomes = {};
     pf.positions = {};
+    pf.crumbledTiles = {};
+    // Seed shared positions before the first packet so idle remote racers and
+    // test bots are visible from the instant the race begins.
+    const racers = this.roomManager.connectedPlayers(room);
+    racers.forEach((player,index) => {
+      const spawnCenter = racers.length > 1
+        ? 32 + index * (96 / Math.max(1, racers.length - 1))
+        : pf.level.spawn.x;
+      pf.positions[player.id] = { x:spawnCenter-16, y:pf.level.spawn.y-34, vx:0, vy:0 };
+    });
     room.state = GAME_STATES.QUESTION;
-    room.deadline = Date.now() + 25000;
+    room.deadline = Date.now() + 30000;
     this.emitRoom(room.code, "platformer:race", {
       roundNumber: room.roundIndex + 1,
       totalRounds: room.totalRounds,
       level: pf.level,
+      crumbledTiles:Object.keys(pf.crumbledTiles),
       players: this.platformerPositions(room),
       deadline: room.deadline
     });
@@ -2516,7 +3218,7 @@ class GameManager {
       if (cur && this.mode(cur) === "platformer" && cur.platformer.phase === "race") {
         this.scoreRace(cur);
       }
-    }, 25000);
+    }, 30000);
     this.timers.set(room.code, handle);
   }
 
@@ -2526,6 +3228,17 @@ class GameManager {
       ...(room.platformer.positions[p.id] || {}),
       done: !!room.platformer.outcomes[p.id]
     }));
+  }
+
+  platformerCrumble(room,socketId,key) {
+    const pf=room?.platformer;
+    if(!room||this.mode(room)!=="platformer"||pf?.phase!=="race")return{ok:false,error:"Not racing."};
+    if(!room.players[socketId]?.connected)return{ok:false,error:"You are not in this room."};
+    if(typeof key!=="string"||pf.level.tiles[key]!=="crumble")return{ok:false,error:"That is not a crumble block."};
+    if(pf.crumbledTiles[key])return{ok:true};
+    pf.crumbledTiles[key]=true;
+    this.emitRoom(room.code,"platformer:crumbled",{key,playerId:socketId});
+    return{ok:true};
   }
 
   platformerPosition(room, socketId, position = {}) {
@@ -2690,7 +3403,7 @@ class GameManager {
     for (const s of scored) {
       room.players[s.playerId].score += s.pointsAwarded;
       room.players[s.playerId].mapDistanceKm =
-        (room.players[s.playerId].mapDistanceKm || 0) + Math.round(s.guess);
+        Math.round(((room.players[s.playerId].mapDistanceKm || 0) + s.guess)*10)/10;
     }
 
     const ranking = scored.map((s) => {
@@ -2700,7 +3413,7 @@ class GameManager {
         name: s.name,
         avatar: d.avatar,
         guess: d.guess,
-        distanceKm: Math.round(d.distanceKm),
+        distanceKm: Math.round(d.distanceKm*10)/10,
         withinTarget: d.distanceKm === 0,
         cumulativeDistanceKm: room.players[s.playerId].mapDistanceKm,
         pointsAwarded: s.pointsAwarded,
@@ -2770,12 +3483,34 @@ class GameManager {
     if (room.state !== GAME_STATES.RESULTS) {
       return { ok: false, error: "The round is not finished yet." };
     }
+    if (room.roundTransitioning) {
+      return { ok: false, error: "The next round is already starting." };
+    }
     if (room.roundIndex + 1 >= room.totalRounds) {
       this.finishMode(room);
       return { ok: true };
     }
-    room.roundIndex += 1;
-    this.beginRound(room);
+    if (this.roundCountdownMs <= 0) {
+      room.roundIndex += 1;
+      this.beginRound(room);
+      return { ok: true };
+    }
+    room.roundTransitioning = true;
+    const startsAt = Date.now() + this.roundCountdownMs;
+    this.emitRoom(room.code, "round:countdown", {
+      mode: this.mode(room), startsAt,
+      seconds: Math.ceil(this.roundCountdownMs / 1000),
+      roundNumber: room.roundIndex + 2, totalRounds: room.totalRounds
+    });
+    this.disarmTimer(room);
+    const handle = this.setTimer(() => {
+      const live = this.roomManager.getRoom(room.code);
+      if (!live || live.state !== GAME_STATES.RESULTS || !live.roundTransitioning) return;
+      this.timers.delete(live.code);
+      live.roundIndex += 1;
+      this.beginRound(live);
+    }, this.roundCountdownMs);
+    this.timers.set(room.code, handle);
     return { ok: true };
   }
 
@@ -2786,7 +3521,7 @@ class GameManager {
     room.deadline = null;
     room.lastActivity = Date.now();
 
-    const standings = Object.values(room.players)
+    const standings = room.arcade?.battle ? this.battleStandings(room) : Object.values(room.players)
       .map((p) => ({
         playerId: p.id, name: p.name, avatar: p.avatar, score: p.score,
         cumulativeDistanceKm: p.mapDistanceKm
@@ -2799,6 +3534,7 @@ class GameManager {
     const payload = {
       mode: this.mode(room),
       arcade: !!room.arcade,
+      battle: !!room.arcade?.battle,
       standings,
       winners,
       winner: winners.length === 1 ? winners[0] : null,
@@ -2822,6 +3558,7 @@ class GameManager {
     room.deadline = null;
     room.placedEvents = [];
     room.bomb = null;
+    room.golf = null;
     room.hitster = null;
     room.drawPile = [];
     room.drawPointer = 0;
@@ -2851,6 +3588,12 @@ class GameManager {
     return { ok: true };
   }
 
+  rematchGame(room, socketId) {
+    const reset = this.restartGame(room, socketId);
+    if (!reset.ok) return reset;
+    return this.startGame(room, socketId);
+  }
+
   // ---- resume + disconnect --------------------------------------------------
 
   buildResume(room, socketId) {
@@ -2868,9 +3611,16 @@ class GameManager {
             activePlayerId: room.turnOrder[room.turnIndex],
             order: this.curlingOrderView(room),
             shots: this.curlingShots(room),
+            stones:room.curlingStones,
             deadline: room.deadline
           }
         };
+      }
+      if(mode==="golf"&&room.golf){
+        const course=this.golfCourse(room.golf.courseId);
+        return {...base,turn:{mode:"golf",roundNumber:room.roundIndex+1,totalRounds:room.totalRounds,
+          question:toPublicQuestion(room.currentQuestion),activePlayerId:room.turnOrder[room.turnIndex],
+          balls:Object.values(room.golf.balls),hole:room.golf.hole,course:{id:course.id,name:course.name,rects:course.rects,obstacles:course.obstacles||[]},order:this.golfOrder(room),firstHoledPlayerId:room.golf.firstHoledPlayerId,deadline:room.deadline}};
       }
       if (mode === "bomb") {
         const activeId = room.turnOrder[room.turnIndex % room.turnOrder.length];
@@ -2931,6 +3681,7 @@ class GameManager {
             roundNumber: room.roundIndex + 1,
             totalRounds: room.totalRounds,
             level: pf?.level,
+            crumbledTiles:Object.keys(pf?.crumbledTiles||{}),
             players: this.platformerPositions(room),
             deadline: room.deadline,
             alreadyDone: !!pf?.outcomes?.[socketId]
@@ -2990,11 +3741,15 @@ class GameManager {
           }
         };
       }
-      if (["colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "pong"].includes(mode) && room.arena) {
+      if (["colorfloor", "vanish", "bombpass", "fire", "racing", "flappy", "runner", "painter", "pong"].includes(mode) && room.arena) {
         return { ...base, arena: this.arenaPublic(room) };
       }
       if (mode === "doors" && room.doors) {
-        return { ...base, doors: this.doorsPublic(room, false) };
+        const payload=this.doorsPublic(room,false),choice=room.doors.choices[socketId],stage=room.doors.stageByPlayer[socketId]||0;
+        return { ...base, doors:{...payload,ownChoice:choice,ownStage:stage,ownRoute:room.doors.revealed[socketId]?(room.doors.routeSets[stage]||room.doors.routeSets.at(-1))[choice]:null} };
+      }
+      if (mode === "timeline" && room.timeline) {
+        return { ...base, turn: this.timelineRoundPayload(room) };
       }
       if (mode === "timeline" && room.hitster?.teamVote) {
         return { ...base, turn: room.currentCard ? this.teamRoundPayload(room) : { mode: "timeline", teamVote: true } };
@@ -3031,7 +3786,18 @@ class GameManager {
       };
     }
     if (room.state === GAME_STATES.RESULTS) return { ...base, results: room.lastResults ?? null };
-    if (room.state === GAME_STATES.INTERMISSION) return { ...base, intermission: room.lastIntermission ?? null };
+    if (room.state === GAME_STATES.INTERMISSION) {
+      const battle=room.arcade?.battle?room.arcade:null;
+      const saved=room.lastIntermission??{};
+      return { ...base, intermission: battle ? {
+        ...saved, battle:true, awaitingSpin:!!battle.awaitingSpin,
+        ceremonyPending:!!battle.ceremonyPending, spinnerId:battle.spinnerId,
+        spinnerName:room.players[battle.spinnerId]?.name,
+        pendingMode:battle.pendingMode, spinEndsAt:battle.spinEndsAt,
+        options:battle.playlist, target:battle.target, wins:battle.wins,
+        standings:this.battleStandings(room)
+      } : saved };
+    }
     if (room.state === GAME_STATES.FINISHED) return { ...base, final: room.lastFinal ?? null };
     return base;
   }
@@ -3045,6 +3811,9 @@ class GameManager {
       // If the disconnected player was the active shooter, move on.
       const activeId = room.turnOrder[room.turnIndex];
       if (!room.players[activeId]?.connected) this.advanceCurling(room);
+    } else if(mode==="golf"){
+      const activeId=room.turnOrder[room.turnIndex];
+      if(!room.players[activeId]?.connected)this.advanceGolf(room);
     } else if (mode === "bomb") {
       const activeId = room.turnOrder[room.turnIndex % room.turnOrder.length];
       if (!room.players[activeId]?.connected) {
