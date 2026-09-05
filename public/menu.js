@@ -204,7 +204,10 @@
       chip.textContent = locked ? "🔒" : "";
       if (locked) { chip.style.background = "rgba(255,255,255,.06)"; }
     } else if (item.type === "emoji") {
-      chip.textContent = locked ? "🔒" : item.value;
+      // Custom face cosmetics are SVG badges; original animals remain emoji.
+      if (locked) chip.textContent = "🔒";
+      else if (typeof window.avatarGlyph === "function") chip.innerHTML = window.avatarGlyph(item.value);
+      else chip.textContent = item.value;
     } else if (item.type === "title") {
       chip.textContent = locked ? "🔒" : (item.label || "—");
       chip.style.fontSize = "13px";

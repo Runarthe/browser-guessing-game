@@ -1,10 +1,24 @@
 # Confetti: Pocket Party — Steam store copy
 
 Draft for the Steamworks store page. Everything here is written from what is
-actually in the build as of this draft: 19 playable minigames, 2–8 players,
-phones as controllers over local wifi.
+actually in the build as of this draft: 18 friend-test-ready minigames, 2–8 players
+over local wifi, joining from a second computer or a phone.
+
+**2026-09-05 launch gate:** PC online play through Steam (App ID 5229250) is
+required before release but is not implemented yet. This remains a LAN baseline
+draft, not final publishable launch copy. Update connectivity and ownership
+claims after real Steam multiplayer validation. See `docs/ROADMAP.md`.
 
 **Decisions still needed** are marked `[DECIDE]`. Don't paste those through.
+
+**Positioning note.** An earlier draft led with "everyone plays from their own
+phone". That over-claims: phone controls have not been validated across every
+minigame, and desktop players are a first-class path, not a fallback. The copy
+below leads with the games and treats *how* people join as a supporting fact.
+
+The same logic applies to the trailer: its job is to answer "is this fun?",
+not "how does it connect?". Joining is explained here in text and shown in one
+screenshot, not in the video.
 
 ---
 
@@ -24,18 +38,21 @@ This is the one that shows in search results and on capsules — the highest
 leverage text on the page. Steam allows 300 characters; this is ~240.
 
 ```
-Everyone plays from their own phone — no extra controllers, no downloads for
-your friends. Spin the wheel, land on one of 19 minigames, and scrap for the
-crown. 2–8 players on the same wifi, one copy for the whole room.
+Spin the wheel, land on one of 19 minigames, and scrap for the crown. Trivia,
+racing, crumbling floors and a great deal of shouting. 2–8 players on the same
+wifi — one copy covers the whole room, and friends join in seconds.
 ```
 
-**Alternative, leading with the party rather than the tech:**
+**Alternative, if you want the join method further forward:**
 
 ```
-The party game where your phone is the controller. 19 minigames, 2–8 players,
-one copy for the whole room — friends just scan a code and they're in. Trivia,
-racing, crumbling floors and a great deal of shouting.
+19 minigames, 2–8 players, one copy for the whole room. Guess, race, dodge and
+shove your way to the crown — friends join from another computer or their
+phone, no download and nothing to install.
 ```
+
+Both lead with what you *do*. "One copy covers the whole room" is the
+commercial hook and it's true regardless of which device anyone joins on.
 
 ---
 
@@ -45,17 +62,17 @@ Steam accepts a limited BBCode subset: `[h2]`, `[b]`, `[i]`, `[list]`,
 `[*]`, `[hr]`. Formatted below ready to paste.
 
 ```
-[h2]Your phone is the controller[/h2]
-No extra gamepads. No app for your friends to install. One person launches
-Confetti, everyone else scans a code or types a short address, and they're
-playing — on the phone already in their pocket.
-
 [h2]Spin. Compete. Claim the crown.[/h2]
 Each round the wheel picks a minigame. Guess, race, dodge, draw, or shove
 someone off a ledge. Scores carry across the whole night, and one player
 walks away as champion.
 
-[h2]19 minigames, and no two rounds the same[/h2]
+[h2]One copy. Everyone plays.[/h2]
+One person owns Confetti and launches it. Everyone else joins from another
+computer on the same wifi, or from the phone already in their pocket — no
+purchase, no download, nothing to install.
+
+[h2]18 minigames, and no two rounds the same[/h2]
 [b]Think fast[/b]
 [list]
 [*] [b]Place It[/b] — Drop a pin on the world map. Closest wins.
@@ -69,34 +86,34 @@ walks away as champion.
 [*] [b]Blast Brawl[/b] — Place bombs, blow through crates, last one standing.
 [*] [b]Vanishing Grid[/b] — Every tile you step on crumbles beneath you.
 [*] [b]Polygon Pong[/b] — Defend your slice of the arena. Three misses and you're out.
-[*] [b]Fire Escape[/b] — Auto-run from the flames and pick a lane, fast.
 [*] [b]Pocket Racers[/b] — Tiny cars, tight corners, three laps.
 [*] [b]Color Twister[/b] — Reach the called colour before the floor turns to lava.
 [/list]
 
 [b]Take your turn[/b]
 [list]
-[*] [b]Balloon[/b] — Pump one to three times. Don't be the one who pops it.
+[*] [b]Balloon Popper[/b] — Pump one to three times. Don't be the one who pops it.
 [*] [b]Curling[/b] — Aim, set power, and knock your rivals clean off the ice.
 [*] [b]Ricochet Golf[/b] — Bank shots around the course and barge into rivals.
 [/list]
 
-...plus Build & Race, Pushy, Wild Run, Dragon Rider, Territory Painter,
-Hide and Go BOOM! and Red Light.
+...plus Build & Race, Penguin Menace, Wild Run, Dragon Rider, Territory Painter,
+Cannon Caper.
 
 [h2]Built for the room you're actually in[/h2]
 [list]
 [*] [b]2 to 8 players[/b], and the game tells you which minigames suit your group size
 [*] [b]One tap[/b] fills the wheel with games that work for however many showed up
 [*] [b]Drop in and out[/b] — a locked phone or a wobbly connection won't cost anyone their seat
-[*] [b]Unlock as you play[/b] — 28 characters, 16 colours, 11 titles and 5 frames
+[*] [b]Unlock as you play[/b] — characters, expression faces, colours, titles and frames
 [/list]
 
 [h2]How it works[/h2]
 [list]
 [*] One person owns and launches Confetti on their PC
 [*] Everyone else opens the address shown on screen, or scans the QR code
-[*] That's it — no accounts, no installs, no extra hardware
+[*] Join from a second computer or from a phone — whatever's to hand
+[*] No accounts, no installs, no extra controllers
 [/list]
 
 [b]Everyone needs to be on the same wifi.[/b] Confetti is built for a room full
@@ -108,12 +125,12 @@ of people, not a voice call. [DECIDE: if online play ships, replace this line.]
 ## Feature bullets (for the "key features" area)
 
 ```
-• Your phone is the controller — nothing for friends to install
-• 19 minigames spanning trivia, racing, drawing, survival and mayhem
+• 18 minigames spanning trivia, racing, drawing, survival and mayhem
+• One copy covers the whole room — friends join free, no download
 • 2–8 players, with recommendations tuned to your group size
-• One copy covers the whole room
+• Play from a second computer or a phone, whatever's to hand
 • Unlockable characters, colours, titles and frames
-• Reconnect-friendly: a locked phone doesn't end your night
+• Reconnect-friendly: a dropped connection doesn't end your night
 ```
 
 ---
@@ -172,9 +189,9 @@ add more of them. Nothing here is a promise — buy it for what it does today.
 
 **What is the current state of the Early Access version?**
 ```
-Fully playable, not a demo. 19 minigames, 2 to 8 players, everyone joining
+18 minigames in the current ready section, 2 to 8 players, everyone joining
 from their own phone on the same wifi, scoring across a full night, and
-unlockable cosmetics. Everything described on this page works today.
+unlockable cosmetics. Steam online must pass testing before this launch draft is published.
 ```
 
 **Will the game be priced differently during and after Early Access?**
@@ -199,8 +216,8 @@ skipped — that feedback shapes what I work on next.
 - `[DECIDE]` **Early Access or a straight 1.0 release.**
 - `[DECIDE]` **The same-wifi line.** It appears twice. It must be accurate at
   launch — vagueness here converts directly into refunds.
-- `[DECIDE]` **Do you claim all 19 minigames?** Claiming 19 sets an
-  expectation that all 19 are good. Cutting the weakest before launch and
+- `[DECIDE]` **Final launch lineup.** The current shortlist contains 18 ready modes;
+  Bomb Pass, Red Light and Fire Escape remain WIP. Cutting the weakest before launch and
   claiming a smaller, stronger number is often the better trade.
 - Capsule art in Steam's exact sizes, 5+ screenshots, and a trailer. For a
   party game the trailer does most of the selling — real gameplay, real

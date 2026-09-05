@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
   <meta name="theme-color" content="#0f1226" />
   <title>Confetti: Pocket Party</title>
-  <link rel="stylesheet" href="styles.css?v=20260808-30" />
+  <link rel="stylesheet" href="styles.css?v=20260812-32" />
 </head>
   <body>
     <div id="game-countdown" class="game-countdown hidden" aria-live="assertive">
@@ -209,7 +209,11 @@
           <div id="guess-slider-wrap" class="guess-slider-wrap">
             <input id="guess-slider" class="guess-slider" type="range" min="0" max="10000" step="1" value="0"
                    aria-label="Choose your answer" />
-            <div class="guess-slider-labels"><span>0</span><strong id="guess-slider-value">0</strong><span id="guess-slider-max">1,000</span></div>
+            <div class="guess-slider-labels"><span id="guess-slider-min">0</span><strong id="guess-slider-value">0</strong><span id="guess-slider-max">1,000</span></div>
+            <div class="guess-nudges" aria-label="Fine tune your guess">
+              <button type="button" data-guess-nudge="-100">−100</button><button type="button" data-guess-nudge="-10">−10</button><button type="button" data-guess-nudge="-1">−1</button>
+              <button type="button" data-guess-nudge="1">+1</button><button type="button" data-guess-nudge="10">+10</button><button type="button" data-guess-nudge="100">+100</button>
+            </div>
           </div>
           <button id="submit-btn" class="btn btn-primary btn-block">Submit guess</button>
         </div>
@@ -238,7 +242,7 @@
         <div id="curling-area" class="hidden">
           <p class="category-chip" id="turn-category"></p>
           <h2 class="question-text" id="turn-question">…</h2>
-          <canvas id="curling-canvas" class="curling-canvas" width="500" height="680"></canvas>
+          <canvas id="curling-canvas" class="curling-canvas" width="560" height="762"></canvas>
           <ul class="shot-list hidden" id="shot-list"></ul>
           <div id="curling-order" class="turn-order"></div>
           <div id="curling-input" class="hidden">
@@ -254,7 +258,7 @@
         <!-- Balloon (formerly bomb) -->
         <div id="bomb-area" class="hidden">
           <div class="balloon-stage">
-            <canvas id="balloon-canvas" width="420" height="300"></canvas>
+            <canvas id="balloon-canvas" width="560" height="380"></canvas>
           </div>
           <p class="bomb-count muted center">Pumps so far: <strong id="bomb-total">0</strong></p>
           <div id="bomb-order" class="turn-order"></div>
@@ -579,15 +583,15 @@
 
   <script src="/socket.io/socket.io.js"></script>
   <script src="world.js?v=20260726-13"></script>
-  <script src="characters.js?v=20260725-15"></script>
+  <script src="characters.js?v=20260905-01"></script>
   <script src="arena25d.js?v=20260725-15"></script>
   <script src="vanishMaps.js?v=20260727-45"></script>
-  <script src="progression.js?v=20260808-03"></script>
-  <script src="modeInfo.js?v=20260808-01"></script>
+  <script src="progression.js?v=20260812-03"></script>
+  <script src="modeInfo.js?v=20260905-01"></script>
   <script src="playerProgress.js?v=20260808-03"></script>
-  <script src="app.js?v=20260808-160"></script>
+  <script src="app.js?v=20260905-01"></script>
   <script src="qrLite.js?v=20260808-02"></script>
   <script src="desktopHost.js?v=20260808-02"></script>
-  <script src="menu.js?v=20260808-04"></script>
+  <script src="menu.js?v=20260812-01"></script>
 </body>
 </html>

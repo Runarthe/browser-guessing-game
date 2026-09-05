@@ -21,7 +21,7 @@ const MODE_INFO = {
   trivia:   { name: "Trivia",   emoji: "🧠", desc: "Everyone guesses a number at once. Closest wins." },
   timeline: { name: "Timeline", emoji: "🕰️", desc: "Hitster-style: slot each event into your timeline. First to the target wins." },
   curling:  { name: "Curling",  emoji: "🥌", desc: "Aim, set power, and slide stones into scoring zones." },
-  bomb:     { name: "Balloon",  emoji: "🎈", desc: "Take turns pumping 1–3 times. Whoever pops the balloon loses the round." }
+  bomb:     { name: "Balloon Popper",  emoji: "🎈", desc: "Take turns pumping 1–3 times. Whoever pops the balloon loses the round." }
 };
 
 // Character options — must match the server's allowed sets (server validates).
@@ -33,9 +33,9 @@ const AVATAR_EMOJIS = window.Progression?.EMOJI_VALUES
 MODE_INFO.map = { name: "Place It", emoji: "🗺️", desc: "Drop a pin on the world map. Closest wins." };
 MODE_INFO.platformer = { name: "Build & Race", emoji: "🏗️", desc: "Place an obstacle each round, then race the course." };
 MODE_INFO.drawing = { name: "Drawing", emoji: "🎨", desc: "One player draws a secret word while everyone else guesses." };
-MODE_INFO.pushy = { name: "Pushy", emoji: "🐧", desc: "Dodge the crowds and stay on the icy platform." };
+MODE_INFO.pushy = { name: "Penguin Menace", emoji: "🐧", desc: "Dodge the crowds and stay on the icy platform." };
 MODE_INFO.redlight = { name: "Red Light", emoji: "🚦", desc: "Mash on green, freeze on red, and race to the finish." };
-MODE_INFO.hidebomb = { name: "Hide and Go BOOM!", emoji: "💣", desc: "Hide in one of four cannons while the solo player lights three fuses." };
+MODE_INFO.hidebomb = { name: "Cannon Caper", emoji: "💣", desc: "Hide in one of four cannons while the solo player lights three fuses." };
 MODE_INFO.colorfloor = { name: "Color Twister", emoji: "🌈", desc: "Race onto the called color before every other tile turns to lava." };
 MODE_INFO.vanish = { name: "Vanishing Grid", emoji: "🕳️", desc: "Every tile you step on crumbles. Be the last player standing." };
 MODE_INFO.bombpass = { name: "Bomb Pass", emoji: "💣", desc: "Tag another player to pass the bomb before its hidden fuse runs out." };
@@ -65,6 +65,10 @@ function cosmeticRequirement(type, value) {
   const list = { emoji: P.EMOJIS, color: P.COLORS, title: P.TITLES, frame: P.FRAMES }[type] || [];
   const item = list.find((i) => (i.id || i.value) === value);
   return item ? P.describe(item.req) : "";
+}
+function cosmeticTooltip(type, value, unlocked) {
+  const requirement = cosmeticRequirement(type, value) || "Available from the start";
+  return `${unlocked ? "Unlocked" : "Locked"} — ${requirement}`;
 }
 const AVATAR_KEY = "confetti-avatar";
 let myAvatar = loadAvatar();
@@ -97,10 +101,17 @@ function avatarHtml(av) {
   const a = (av && av.avatar) ? av.avatar : av;
   const emoji = (a && a.emoji) || "🎮";
   const color = (a && a.color) || "#888";
-  const inner = `<span class="ava" style="background:${esc(color)}">${esc(emoji)}</span>`;
+  const inner = `<span class="ava" style="background:${esc(color)}">${avatarGlyph(emoji)}</span>`;
   const ring = frameStyle(a && a.frame);
-  return ring ? `<span class="ava-frame" style="${esc(ring)}">${inner}</span>` : inner;
+  const accessory = window.Progression?.FRAMES.find((f) => f.id === (a && a.frame))?.style?.accessory;
+  return ring ? `<span class="ava-frame${accessory ? ` ava-accessory-${accessory}` : ""}" style="${esc(ring)}">${inner}</span>` : inner;
 }
+
+function avatarGlyph(value) {
+  if (!String(value).startsWith("face-")) return esc(value);
+  return window.PaperCharacter?.faceSvg(value) || "🙂";
+}
+window.avatarGlyph = avatarGlyph;
 
 /** Earned title shown beside a player's name, or "" when they have none. */
 function titleHtml(av) {
@@ -523,12 +534,32 @@ window.ConfettiAudio = {
 };
 music.init();
 
+// A tiny menu-only confetti acknowledgement. It deliberately uses DOM pieces
+// rather than canvas so it can burst from whichever button was pressed.
+function menuConfettiBurst(button, event) {
+  const rect=button.getBoundingClientRect();
+  const host=document.createElement("span");host.className="menu-confetti-burst";
+  // Use the actual pointer position when it is available. Some compact option
+  // buttons briefly report a zero-sized rect while their grid is rebuilding.
+  const x=Number.isFinite(event?.clientX) ? event.clientX : rect.left+rect.width/2;
+  const y=Number.isFinite(event?.clientY) ? event.clientY : rect.top+rect.height/2;
+  host.style.left=`${x}px`;host.style.top=`${y}px`;
+  const colors=["#ff6b6b","#ffcb3d","#4ade80","#60a5fa","#f472b6","#a78bfa"];
+  for(let i=0;i<9;i++){
+    const bit=document.createElement("i"),angle=Math.PI*2*i/9+(Math.random()-.5)*.34,distance=18+Math.random()*24;
+    bit.style.setProperty("--dx",`${Math.cos(angle)*distance}px`);bit.style.setProperty("--dy",`${Math.sin(angle)*distance-12}px`);
+    bit.style.setProperty("--rot",`${Math.round(Math.random()*260-130)}deg`);bit.style.background=colors[i%colors.length];host.appendChild(bit);
+  }
+  document.body.appendChild(host);setTimeout(()=>host.remove(),620);
+}
+
 // Add tactile menu feedback without sounding on held movement or joystick
 // controls. Repeated clicks are lightly throttled for phone players.
 document.addEventListener("click", (event) => {
   const button = event.target.closest("button");
   if (!button || button.disabled || button.matches(".press-btn,.arena-control,.mobile-control,[data-direction],[data-key]")) return;
   sfx.play("uiClick", { volume: .28, rate: .98 + Math.random() * .04, throttle: 45 });
+  if (!button.closest("#screen-arena,#screen-platformer,#screen-curling,#screen-drawing,#screen-bomb,#screen-doors")) menuConfettiBurst(button,event);
 });
 
 // ---- Character creator ------------------------------------------------------
@@ -556,9 +587,9 @@ function buildCreator() {
     const unlocked = cosmeticUnlocked("emoji", em);
     const b = document.createElement("button");
     b.className = "emoji-opt" + (em === myAvatar.emoji ? " on" : "") + (unlocked ? "" : " locked");
-    b.textContent = unlocked ? em : "🔒";
+    if(unlocked)b.innerHTML=avatarGlyph(em);else b.textContent="🔒";
     b.disabled = !unlocked;
-    b.title = unlocked ? "" : cosmeticRequirement("emoji", em);
+    b.title = cosmeticTooltip("emoji", em, unlocked);
     b.addEventListener("click", () => { myAvatar.emoji = em; saveAvatar(); buildCreator(); });
     eg.appendChild(b);
   });
@@ -570,7 +601,7 @@ function buildCreator() {
     b.className = "color-opt" + (col === myAvatar.color ? " on" : "") + (unlocked ? "" : " locked");
     b.style.background = unlocked ? col : "rgba(255,255,255,.08)";
     b.disabled = !unlocked;
-    b.title = unlocked ? "" : cosmeticRequirement("color", col);
+    b.title = cosmeticTooltip("color", col, unlocked);
     if (!unlocked) b.textContent = "🔒";
     b.addEventListener("click", () => { myAvatar.color = col; saveAvatar(); buildCreator(); });
     cg.appendChild(b);
@@ -598,7 +629,8 @@ function buildLobbyCreator(room) {
   AVATAR_EMOJIS.forEach((emoji) => {
     const button = document.createElement("button");
     button.className = "emoji-opt" + (emoji === myAvatar.emoji ? " on" : "");
-    button.textContent = emoji;
+    button.innerHTML = avatarGlyph(emoji);
+    button.title = cosmeticTooltip("emoji", emoji, cosmeticUnlocked("emoji", emoji));
     button.addEventListener("click", () => socket.emit("player:avatar", { avatar: { ...myAvatar, emoji } }));
     eg.appendChild(button);
   });
@@ -608,11 +640,11 @@ function buildLobbyCreator(room) {
     button.className = "color-opt" + (color === myAvatar.color ? " on" : "");
     button.style.background = color;
     button.disabled = used.has(color);
-    button.title = used.has(color) ? "Already used by another player" : "Choose this color";
+    button.title = used.has(color) ? "Already used by another player" : cosmeticTooltip("color", color, cosmeticUnlocked("color", color));
     button.addEventListener("click", () => socket.emit("player:avatar", { avatar: { ...myAvatar, color } }));
     cg.appendChild(button);
   });
-  const preview = $("lobby-char-preview"); preview.textContent = myAvatar.emoji; preview.style.background = myAvatar.color;
+  const preview = $("lobby-char-preview"); preview.innerHTML = avatarGlyph(myAvatar.emoji); preview.style.background = myAvatar.color;
 }
 
 // ---- Start menu -------------------------------------------------------------
@@ -925,9 +957,16 @@ socket.on("turn:update", (payload) => {
   else if (payload.mode === "bomb") updateBomb(payload);
 });
 socket.on("timeline:votes", ({ votes }) => { updateVotes(votes); });
+socket.on("timeline:picks", ({ picks }) => {
+  if(!state.tlRound)return;
+  state.tlRound.picks=picks||{};
+  renderTimelineSides(state.tlRound);
+});
+socket.on("timeline:teams", (payload) => { state.timelineTeamDraw=payload; });
 socket.on("timeline:result", (payload) => {
   sfx.play("cardPlace", { volume: .55, rate: .96 + Math.random() * .08, throttle: 100 });
-  if (payload.teamVote) showTeamResult(payload);
+  if (payload.sides) showTimelineRoundResult(payload);
+  else if (payload.teamVote) showTeamResult(payload);
   else showTimelineToast(payload);
 });
 socket.on("platformer:build", applyPlatformerBuild);
@@ -1360,7 +1399,7 @@ function showSpinAnnouncement(name){
 }
 
 const WHEEL_COLORS = ["#f97316","#3b82f6","#22c55e","#a855f7","#ec4899","#eab308","#06b6d4","#ef4444"];
-const WHEEL_SHORT_NAMES = {platformer:"Build & Race",hidebomb:"Hide & Boom",colorfloor:"Twister",vanish:"Vanish",fire:"Fire",
+const WHEEL_SHORT_NAMES = {platformer:"Build & Race",hidebomb:"Cannon Caper",pushy:"Penguin Menace",bomb:"Balloon Popper",colorfloor:"Twister",vanish:"Vanish",fire:"Fire",
   racing:"Racers",flappy:"Dragon",runner:"Wild Run",painter:"Painter",pong:"Pong",timeline:"Timeline",drawing:"Drawing"};
 function paintBattleWheel(options = []) {
   const wheel = $("battle-wheel"), count = Math.max(1, options.length);
@@ -1726,6 +1765,10 @@ function applyQuestion(payload, { alreadyGuessed, guess } = {}) {
 }
 
 function triviaSliderConfig(question) {
+  // Covers every value in the current trivia bank, including BCE years and
+  // the 9.2-million Sahara question. Fine adjustment happens in the numeric
+  // field and nudge buttons below, one unit at a time.
+  return { min: -3_000, max: 10_000_000, step: 1 };
   const hint = `${question?.text || ""} ${question?.unit || ""}`.toLowerCase();
   let max = 1_000_000;
   if (/moon from earth/.test(hint)) max = 500_000;
@@ -1739,6 +1782,19 @@ function triviaSliderConfig(question) {
   return { max, step: 1 };
 }
 
+function setTriviaGuess(value, { syncSlider = true } = {}) {
+  const config = state.guessSliderConfig;
+  if (!config) return;
+  const raw = Number(value);
+  const safe = Math.max(config.min, Math.min(config.max, Number.isFinite(raw) ? Math.round(raw) : config.min));
+  $("guess-input").value = safe;
+  $("guess-slider-value").textContent = safe.toLocaleString();
+  if (syncSlider) {
+    const span = config.max - config.min + 1;
+    $("guess-slider").value = Math.round(Math.log(safe - config.min + 1) / Math.log(span) * 10000);
+  }
+}
+
 function configureGuessSlider(question) {
   const wrap = $("guess-slider-wrap");
   if (state.mode !== "trivia") {
@@ -1746,8 +1802,12 @@ function configureGuessSlider(question) {
     return;
   }
   state.guessSliderConfig = triviaSliderConfig(question);
+  $("guess-input").min = String(state.guessSliderConfig.min);
+  $("guess-input").max = String(state.guessSliderConfig.max);
+  $("guess-input").step = String(state.guessSliderConfig.step);
   $("guess-slider").value = "0";
-  $("guess-slider-value").textContent = "0";
+  $("guess-slider-min").textContent = state.guessSliderConfig.min.toLocaleString();
+  $("guess-slider-value").textContent = state.guessSliderConfig.min.toLocaleString();
   $("guess-slider-max").textContent = state.guessSliderConfig.max.toLocaleString();
   wrap.classList.remove("hidden");
 }
@@ -1755,19 +1815,22 @@ function configureGuessSlider(question) {
 $("guess-slider").addEventListener("input", () => {
   const config = state.guessSliderConfig;
   if (!config) return;
-  const raw = Math.pow(config.max + 1, Number($("guess-slider").value) / 10000) - 1;
-  const value = Math.max(0, Math.min(config.max, Math.round(raw / config.step) * config.step));
-  $("guess-input").value = value;
-  $("guess-slider-value").textContent = value.toLocaleString();
+  const span = config.max - config.min + 1;
+  const value = config.min - 1 + Math.pow(span, Number($("guess-slider").value) / 10000);
+  setTriviaGuess(value, { syncSlider: false });
 });
 
 $("guess-input").addEventListener("input", () => {
   const config = state.guessSliderConfig;
   if (!config || state.mode !== "trivia") return;
-  const value = Math.max(0, Math.min(config.max, Number($("guess-input").value) || 0));
-  $("guess-slider").value = Math.round(Math.log(value + 1) / Math.log(config.max + 1) * 10000);
-  $("guess-slider-value").textContent = (Number($("guess-input").value) || 0).toLocaleString();
+  setTriviaGuess($("guess-input").value);
 });
+
+document.querySelectorAll("[data-guess-nudge]").forEach((button) => button.addEventListener("click", () => {
+  if (state.mode !== "trivia" || !state.guessSliderConfig) return;
+  const current = Number($("guess-input").value);
+  setTriviaGuess((Number.isFinite(current) ? current : 0) + Number(button.dataset.guessNudge));
+}));
 
 function legPrefix() {
   const a = state.room && state.room.arcade;
@@ -1823,6 +1886,9 @@ function applyTurn(payload) {
   } else if (payload.mode === "bomb") {
     $("turn-round-label").textContent = legPrefix() + `Round ${payload.roundNumber} of ${payload.totalRounds}`;
     updateBomb(payload);
+  } else if (payload.sides) {
+    $("turn-round-label").textContent = legPrefix() + "🕰️ Timeline";
+    renderTimelineSides(payload);
   } else if (payload.teamVote) {
     $("turn-round-label").textContent = legPrefix() + "🕰️ Timeline — team vote";
     renderTimelineTeam(payload);
@@ -1833,6 +1899,43 @@ function applyTurn(payload) {
 }
 
 // ---- Timeline TEAM VOTING ---------------------------------------------------
+function timelineSideRow(side,picks,interactive){
+  const cards=(side.cards||[]).slice().sort((a,b)=>a.year-b.year),minePick=picks?.[state.selfId]?.slot;
+  const markers=(slot)=>(side.members||[]).filter((m)=>picks?.[m.playerId]?.slot===slot).map((m)=>
+    `<span class="tl-voter" title="${esc(m.name)}">${avatarHtml(m.avatar)}</span>`).join("");
+  const slot=(i)=>interactive?`<button class="tl-slot ${minePick===i?"mine":""}" data-slot="${i}">＋</button>`:`<span class="tl-slot ghost"></span>`;
+  let html=`<div class="tl-row" style="--tl-side:${esc(side.color)}">${slot(0)}<div class="tl-voters">${markers(0)}</div>`;
+  cards.forEach((c,i)=>{html+=`<div class="tl-known"><span class="tl-known-year">${c.year}</span><span class="tl-known-label">${esc(c.label)}</span></div>${slot(i+1)}<div class="tl-voters">${markers(i+1)}</div>`;});
+  return html+`</div>`;
+}
+function renderTimelineSides(payload){
+  state.tlRound=payload;$("tl-vote-controls").classList.add("hidden");
+  $("tl-target-chip").textContent=`First to ${payload.target} correct`;
+  $("tl-card-label").textContent=payload.card?.label||"…";
+  const sides=payload.sides||[],mine=sides.find((s)=>s.memberIds?.includes(state.selfId))||sides[0];
+  $("tl-wait").textContent="Tap a spot — your LAST choice when time ends counts.";
+  $("tl-others-title").textContent=payload.teamMode?"Other team timeline":"Other timelines";
+  const header=`<div class="tl-side-title" style="--tl-side:${esc(mine?.color||"#fff")}">${esc(mine?.name||"My timeline")}</div>`;
+  $("tl-myrow").innerHTML=header+timelineSideRow(mine||{cards:[],members:[]},payload.picks,true);
+  $("tl-myrow").querySelectorAll(".tl-slot").forEach((button)=>button.addEventListener("click",()=>{
+    sound.beep(620,.07);socket.emit("timeline:place",{slot:Number(button.dataset.slot)});
+  }));
+  $("tl-others").innerHTML=sides.filter((side)=>side!==mine).map((side)=>
+    `<div class="tl-side-card" style="--tl-side:${esc(side.color)}"><div class="tl-side-title">${esc(side.name)}</div>${timelineSideRow(side,payload.picks,false)}<div class="tl-side-members">${(side.members||[]).map((m)=>`${avatarHtml(m.avatar)} ${esc(m.name)} <b>${m.score}</b>`).join(" · ")}</div></div>`).join("");
+  if(state.timelineTeamDraw){
+    const draw=state.timelineTeamDraw;state.timelineTeamDraw=null;
+    const toast=$("tl-toast");toast.className="tl-toast good";toast.innerHTML=`<span class="tl-team-wheel">🎡</span><strong>${draw.teamMode?"TEAMS!":"SOLO TIMELINES!"}</strong><span>${(draw.sides||[]).map((s)=>esc(s.name)).join(" vs ")}</span>`;toast.classList.remove("hidden");
+    clearTimeout(renderTimelineSides.drawTimer);renderTimelineSides.drawTimer=setTimeout(()=>toast.classList.add("hidden"),2200);
+  }
+}
+function showTimelineRoundResult(payload){
+  state.timelineRevealUntil=performance.now()+2700;
+  const mine=(payload.perPlayer||[]).find((p)=>p.playerId===state.selfId);
+  const toast=$("tl-toast");toast.className="tl-toast "+(mine?.correct?"good":"bad");
+  toast.innerHTML=`<strong>${mine?.correct?"You nailed it! ✅":"Not this time ❌"}</strong><span>${esc(payload.card.label)} — <b>${payload.card.year}</b></span>`;toast.classList.remove("hidden");
+  if(mine?.correct)sound.happy();else sound.sad();clearTimeout(showTimelineRoundResult.timer);showTimelineRoundResult.timer=setTimeout(()=>toast.classList.add("hidden"),2500);
+}
+
 $("tl-lock-btn").addEventListener("click", () => {
   const mine = (state.team && state.team.votes || []).find((v) => v.playerId === state.selfId);
   const nowLocked = !(mine && mine.locked);
@@ -2109,13 +2212,33 @@ function drawCurlingAim(ctx,direction,power=null,now=performance.now()){
   ctx.fillStyle="#e2e8f0";ctx.fillRect(startX-5,startY-20,10,8);
   ctx.restore();
 }
+// Curling and golf share one generously sized canvas. Keep their original
+// coordinate system, then scale it together so the course and player tokens
+// stay comfortably readable without changing any server-side physics.
+const TURN_CANVAS_SCALE=1.12;
+function prepareTurnCanvas(canvas,ctx){
+  ctx.setTransform(1,0,0,1,0,0);
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.setTransform(TURN_CANVAS_SCALE,0,0,TURN_CANVAS_SCALE,0,0);
+}
+function drawAvatarToken(ctx,x,y,r,avatar,fallbackColor="#94a3b8"){
+  const color=avatar?.color||fallbackColor,emoji=avatar?.emoji||"●";
+  ctx.fillStyle="rgba(0,0,0,.25)";ctx.beginPath();ctx.ellipse(x+3,y+r*.48,r*.95,r*.38,0,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle=color;ctx.strokeStyle="#fff";ctx.lineWidth=2.5;ctx.beginPath();ctx.arc(x,y,r,0,Math.PI*2);ctx.fill();ctx.stroke();
+  ctx.fillStyle="#fff8e8";ctx.beginPath();ctx.arc(x,y,r*.7,0,Math.PI*2);ctx.fill();
+  // Expression faces need a broader drawing scale than system emoji glyphs to
+  // remain readable on the small golf balls and curling stones.
+  if(String(emoji).startsWith("face-")&&window.PaperCharacter?.drawBadgeFace){ctx.save();ctx.translate(x,y);window.PaperCharacter.drawBadgeFace(ctx,emoji,r*2.7,-r*.18);ctx.restore();}
+  else {ctx.fillStyle="#17213d";ctx.font=`${Math.round(r*1.05)}px "Segoe UI Emoji","Apple Color Emoji",sans-serif`;ctx.textAlign="center";ctx.textBaseline="middle";ctx.fillText(emoji,x,y+1);}
+  ctx.textBaseline="alphabetic";
+}
 function drawCurlingRink(now=performance.now()){
   if(state.mode==="golf")return drawGolfCourse(now);
   const canvas=$("curling-canvas"),ctx=canvas.getContext("2d");
   // Aim controls only belong to the local player while their shot is active.
   // Keep this in renderer scope: both aim branches and the RAF condition use it.
   const canShowAim=!$("curling-input").classList.contains("hidden")&&!$("turn-submit").disabled;
-  ctx.clearRect(0,0,500,680);
+  prepareTurnCanvas(canvas,ctx);
   ctx.fillStyle="#082f49";ctx.fillRect(0,0,500,680);
   const ice=ctx.createLinearGradient(0,20,0,660);ice.addColorStop(0,"#effcff");ice.addColorStop(1,"#b9e8f5");
   ctx.fillStyle=ice;ctx.fillRect(55,20,390,640);
@@ -2179,11 +2302,9 @@ function drawCurlingRink(now=performance.now()){
     if(stone.off)return;
     const x=250+stone.x*1.3,y=30+stone.y*.78,shot=curlingVisual.shots.find(s=>s.stoneId===stone.stoneId);
     const color=shot?.avatar?.color||["#f97316","#22c55e","#a855f7","#0ea5e9"][index%4];
-    ctx.fillStyle="rgba(0,0,0,.22)";ctx.beginPath();ctx.ellipse(x+3,y+6,17,7,0,0,Math.PI*2);ctx.fill();
-    ctx.fillStyle=color;ctx.strokeStyle="#fff";ctx.lineWidth=2;ctx.beginPath();ctx.arc(x,y,14,0,Math.PI*2);ctx.fill();ctx.stroke();
-    ctx.fillStyle="#e2e8f0";ctx.fillRect(x-5,y-20,10,8);
-    ctx.fillStyle="#fff";ctx.font="12px system-ui";ctx.textAlign="center";ctx.textBaseline="middle";
-    ctx.fillText(shot?.avatar?.emoji||shot?.throwNumber||"",x,y+1);ctx.textBaseline="alphabetic";
+    drawAvatarToken(ctx,x,y,19,shot?.avatar,color);
+    // A slightly oversized handle keeps the token legible as a curling stone.
+    ctx.fillStyle="#e2e8f0";ctx.strokeStyle="#0f3b57";ctx.lineWidth=1.5;ctx.beginPath();ctx.roundRect(x-7,y-29,14,10,4);ctx.fill();ctx.stroke();
   });
   if(canShowAim&&curlingControl.stage==="direction"){
     const dir=curlingDirection(now);drawCurlingAim(ctx,dir,null,now);
@@ -2228,7 +2349,7 @@ function updateGolf(payload){
 
 function drawGolfCourse(now=performance.now()){
   const canvas=$("curling-canvas"),ctx=canvas.getContext("2d"),canAim=!$("curling-input").classList.contains("hidden")&&!$("turn-submit").disabled;
-  ctx.clearRect(0,0,500,680);ctx.fillStyle="#16281e";ctx.fillRect(0,0,500,680);
+  prepareTurnCanvas(canvas,ctx);ctx.fillStyle="#16281e";ctx.fillRect(0,0,500,680);
   ctx.fillStyle="#315b3d";for(let y=18;y<680;y+=32)for(let x=(y/32)%2?12:28;x<500;x+=44){ctx.beginPath();ctx.arc(x,y,2,0,Math.PI*2);ctx.fill();}
   const grass=ctx.createLinearGradient(55,0,445,0);grass.addColorStop(0,"#7bc96f");grass.addColorStop(.5,"#9ddd78");grass.addColorStop(1,"#70bd65");
   const course=golfVisual.course||{name:"Corner Bank",rects:[{x:55,y:65,w:390,h:150},{x:55,y:65,w:130,h:575}],obstacles:[]};
@@ -2255,8 +2376,7 @@ function drawGolfCourse(now=performance.now()){
       if(results)queueMicrotask(()=>{renderResults(results);showScreen("results");sound.beep(880,.14,"triangle");});else if(pending)queueMicrotask(()=>updateGolf(pending));}
   }
   balls.forEach((b,i)=>{if(b.holed)return;const players=Array.isArray(state.room?.players)?state.room.players:[],player=players.find((p)=>p.id===b.playerId);
-    ctx.fillStyle="rgba(0,0,0,.25)";ctx.beginPath();ctx.ellipse(b.x+3,b.y+6,13,6,0,0,Math.PI*2);ctx.fill();ctx.fillStyle=player?.avatar?.color||["#fff","#fde047","#60a5fa","#fb7185"][i%4];ctx.strokeStyle="#fff";ctx.lineWidth=2;ctx.beginPath();ctx.arc(b.x,b.y,11,0,Math.PI*2);ctx.fill();ctx.stroke();
-    ctx.fillStyle="#12221a";ctx.font="900 9px sans-serif";ctx.textAlign="center";ctx.fillText(player?.name?.slice(0,2).toUpperCase()||i+1,b.x,b.y+3);});
+    drawAvatarToken(ctx,b.x,b.y,15,player?.avatar,["#fff","#fde047","#60a5fa","#fb7185"][i%4]);});
   if(golfVisual.fireworksAt){const age=now-golfVisual.fireworksAt;if(age<1800){const colors=["#facc15","#fb7185","#60a5fa","#4ade80","#fff"];
     for(let burst=0;burst<4;burst++){const progress=(age-burst*230)/1050;if(progress<0||progress>1)continue;const cx=hole.x+(burst-1.5)*48,cy=hole.y-45-(burst%2)*35;
       for(let i=0;i<16;i++){const angle=i*Math.PI*2/16+burst*.45,distance=progress*(34+burst*7);ctx.globalAlpha=1-progress;ctx.fillStyle=colors[(i+burst)%colors.length];ctx.beginPath();ctx.arc(cx+Math.cos(angle)*distance,cy+Math.sin(angle)*distance+progress*progress*20,3,0,Math.PI*2);ctx.fill();}}
@@ -2326,8 +2446,9 @@ function updateBomb(payload) {
     const active = payload.order.find((o) => o.active);
     balloon.turnActiveId = active ? active.playerId : null;
     balloon.prevTotal = total; // baseline before this player pumps
-    const activePlayer = active && state.room ? state.room.players.find((p) => p.id === active.playerId) : null;
-    if (activePlayer && activePlayer.avatar) balloon.color = activePlayer.avatar.color;
+    // The balloon has its own round colour. It should not look like it belongs
+    // to whichever player happened to pump it most recently.
+    if (fresh) balloon.color = ["#ff5b6e", "#a78bfa", "#38bdf8", "#f59e0b"][(Math.max(1,payload.roundNumber||1)-1)%4];
     bombSyncLine(fresh);
     drawBalloon();requestAnimationFrame(()=>{if(balloonActiveNow()){drawBalloon();startBalloonLoop();}});
   } else {
@@ -2339,8 +2460,6 @@ function updateBomb(payload) {
     jumps = Math.max(1, Math.min(3, jumps));
     balloon.prevTotal = total;
     if (pumperId) {
-      const rm = balloon.roster.find((r) => r.id === pumperId);
-      if (rm) balloon.color = rm.color;
       bombPump(pumperId, jumps);
     }
   }
@@ -2489,16 +2608,23 @@ function drawCharAt(ctx, x, footY, member, st, dir, extraRot) {
   const avatar = { emoji: member.emoji, color: member.color };
   if (window.PaperCharacter) {
     if (extraRot) { ctx.save(); ctx.translate(x, footY - 17); ctx.rotate(extraRot); ctx.translate(-x, -(footY - 17)); }
-    window.PaperCharacter.draw(ctx, { x, y: footY - 17, size: 34, direction: dir, state: st, avatar, time: performance.now() + (member.phase || 0) * 1000 });
+    window.PaperCharacter.draw(ctx, { x, y: footY - 21, size: 44, direction: dir, state: st, avatar, time: performance.now() + (member.phase || 0) * 1000 });
     if (extraRot) ctx.restore();
   } else {
-    ctx.fillStyle = member.color; ctx.beginPath(); ctx.arc(x, footY - 17, 14, 0, 7); ctx.fill();
-    ctx.font = "18px system-ui"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(member.emoji, x, footY - 16);
+    ctx.fillStyle = member.color; ctx.beginPath(); ctx.arc(x, footY - 21, 18, 0, 7); ctx.fill();
+    ctx.font = "23px system-ui"; ctx.textAlign = "center"; ctx.textBaseline = "middle"; ctx.fillText(member.emoji, x, footY - 20);
   }
 }
 
 // ---- rotating pump queue ----------------------------------------------------
-function bombSlotX(i, W) { return Math.round(W * 0.48) - 52 - i * 32; } // slot 0 = front (nearest pump)
+function bombSlotX(i, W) {
+  const count=Math.max(1,balloon.line.length+(balloon.active?1:0));
+  const gap=Math.min(40,Math.max(29,(W*.40-72)/Math.max(1,count-1)));
+  // The waiting line belongs to the left side of the stage. Keep even the
+  // front-most person well clear of the pump, so it reads as a queue rather
+  // than characters standing inside the equipment.
+  return Math.round(W*.48)-68-i*gap; // slot 0 = front (nearest pump)
+}
 
 /** Build or reconcile the visible line from the roster (turn order). */
 function bombSyncLine(reset) {
@@ -4087,7 +4213,8 @@ function applyArenaStart(payload) {
     visualLayer:me?.layer||0,angle:me?.angle||0,speed:0,lap:me?.lap||0,checkpoint:me?.checkpoint||0,
     upgrades:me?.upgrades||{range:2,bombs:1,speed:0},paddleT:me?.paddleT??.5,
     distance:me?.distance||0,serverDistance:me?.distance||0,coins:me?.coins||0,perfects:me?.perfects||0,
-    collectedCoins:me?.collectedCoins||[],boostUntil:me?.boostUntil||0,painterSpeedUntil:me?.painterSpeedUntil||0,painterStunnedUntil:me?.painterStunnedUntil||0 };
+    collectedCoins:me?.collectedCoins||[],boostUntil:me?.boostUntil||0,grounded:me?.grounded??true,groundY:me?.groundY??326,
+    painterSpeedUntil:me?.painterSpeedUntil||0,painterStunnedUntil:me?.painterStunnedUntil||0 };
   arena.player.lastSafeX=arena.player.x;arena.player.lastSafeY=arena.player.y;
   arena.camY = (me?.layer||0) * VANISH.spacing; // camera starts on the player's floor
   arena.fallFlash = null;
@@ -4163,6 +4290,7 @@ function updateArenaPlayers(players) {
         if(arena.mode==="runner"){
           arena.player.serverDistance=p.distance||0;arena.player.coins=p.coins||0;arena.player.perfects=p.perfects||0;
           arena.player.collectedCoins=p.collectedCoins||arena.player.collectedCoins||[];arena.player.boostUntil=p.boostUntil||0;
+          arena.player.serverGrounded=!!p.grounded;arena.player.serverGroundY=Number.isFinite(p.groundY)?p.groundY:326;
           // Snap only after a genuinely large discrepancy; ordinary packets are
           // blended in stepArena so scrolling never stutters at network cadence.
           if(Math.abs((arena.player.distance||0)-arena.player.serverDistance)>95)arena.player.distance=arena.player.serverDistance;
@@ -4240,14 +4368,21 @@ function stepArena(dt,now) {
     if(Number.isFinite(p.serverDistance))p.distance+=(p.serverDistance-p.distance)*Math.min(1,dt*2.8);
     p.visualPace=visualPace;
     arena.runnerAnimTime=(arena.runnerAnimTime||0)+dt*(visualPace/.145);
+    const oldY=p.y;
     p.vy=(p.vy||0)+980*dt;p.y+=p.vy*dt;
-    let floor=326;
+    let floor=326, landedOnPlatform=false;
     for(const platform of arena.runnerPlatforms||[]){
       const sx=platform.x-(p.distance||0);
-      if(sx>95-platform.w/2&&sx<175+platform.w/2&&p.vy>=0&&p.y<=platform.y+16)floor=Math.min(floor,platform.y);
+      // Land only when crossing the top while descending. This precisely
+      // mirrors the server collision and prevents a platform from catching
+      // the runner from below or repeatedly ticking their position.
+      const overlaps=sx>95-platform.w/2&&sx<175+platform.w/2;
+      if(overlaps&&p.vy>=0&&oldY<=platform.y&&p.y>=platform.y){floor=Math.min(floor,platform.y);landedOnPlatform=true;}
     }
+    if(p.serverGrounded&&Number.isFinite(p.serverGroundY)&&p.serverGroundY<326&&p.y>=p.serverGroundY-8){floor=Math.min(floor,p.serverGroundY);landedOnPlatform=true;}
     p.groundY=floor;
-    if(p.y>=floor){p.y=floor;p.vy=0;}
+    if(p.y>=floor){p.y=floor;p.vy=0;p.grounded=true;}else p.grounded=false;
+    if(landedOnPlatform)p.grounded=true;
     stabilizeArenaPosition(p);
     if(now-arena.lastSent>70){arena.lastSent=now;socket.emit("arena:position",{instanceId:arena.instanceId,x:0,y:0,roll:p.rolling});}
     return;
@@ -5171,8 +5306,8 @@ function jumpArena(){
     sfx.whoosh();return;
   }
   if(arena.mode==="runner"){
-    if(now-arena.lastJumpAt<180||arena.player.y<324)return;
-    arena.lastJumpAt=now;arena.player.vy=-420;socket.emit("arena:jump",{instanceId:arena.instanceId});
+    if(now-arena.lastJumpAt<180||!arena.player.grounded)return;
+    arena.lastJumpAt=now;arena.player.vy=-420;arena.player.grounded=false;socket.emit("arena:jump",{instanceId:arena.instanceId});
     sfx.play("jump",{volume:.34,rate:.94,throttle:110});return;
   }
   if(now-arena.lastJumpAt<1000)return;
@@ -5467,7 +5602,7 @@ function renderDrawingResults(payload) {
 
 function renderPushyResults(payload) {
   pushy.phase = "results"; cancelAnimationFrame(pushy.raf);
-  $("results-caption").textContent = "Platform survival";
+  $("results-caption").textContent = "Penguin Menace";
   $("correct-answer").textContent = `${payload.survivors} survived`;
   $("results-head").classList.remove("hidden"); $("results-timeline").classList.add("hidden");
   const list = $("result-list"); list.innerHTML = "";
@@ -5504,7 +5639,7 @@ function renderRedLightResults(payload) {
 }
 
 function renderHideBombResults(payload) {
-  $("results-caption").textContent = "Hide and Go BOOM!";
+  $("results-caption").textContent = "Cannon Caper";
   const survivors = payload.ranking.filter((r) => r.survived).length;
   $("correct-answer").textContent = survivors ? `${survivors} escaped!` : "Bomber wins! 💥";
   $("results-head").classList.remove("hidden"); $("results-timeline").classList.add("hidden");

@@ -103,7 +103,7 @@
   const PREFERRED = [
     "map", "timeline", "trivia", "fire", "pong", "bomb",
     "curling", "vanish", "runner", "platformer", "racing",
-    "colorfloor", "doors", "pushy", "flappy", "golf", "painter"
+    "colorfloor", "pushy", "flappy", "golf", "painter"
   ];
 
   function recommendedPlaylist(players, { limit = 10 } = {}) {

@@ -66,6 +66,9 @@ test("modeInfo: sorting floats well-suited modes to the top", () => {
 test("modeInfo: recommendations suit the room and never include broken modes", () => {
   for (const players of [2, 3, 4, 6, 8]) {
     const list = MI.recommendedPlaylist(players);
+    for (const wip of ["doors", "bombpass", "redlight"]) {
+      assert.ok(!MI.recommendedPlaylist(players, { limit: 21 }).includes(wip), `${wip} must remain outside recommendations`);
+    }
     assert.ok(list.length >= 4, `${players} players gets a usable playlist (${list.length})`);
     for (const mode of list) {
       assert.notEqual(MI.fitFor(mode, players), "too-few",

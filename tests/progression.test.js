@@ -13,8 +13,6 @@ const stats = (over = {}) => ({
 
 test("progression: base cosmetics are always available", () => {
   const c = P.catalogue(stats());
-  // The original 16 emojis and 8 colours must never be locked, or existing
-  // saved avatars would become invalid.
   assert.equal(c.emojis.slice(0, 16).every((e) => e.unlocked), true);
   assert.equal(c.colors.slice(0, 8).every((x) => x.unlocked), true);
   assert.equal(c.titles.find((t) => t.id === "none").unlocked, true);
@@ -41,7 +39,8 @@ test("progression: a strong player unlocks strictly more than a new one", () => 
   const rookie = P.progressSummary(stats());
   const pro = P.progressSummary(stats({
     gamesPlayed: 40, gamesWon: 30, bestStreak: 6,
-    modeWins: { vanish: 5, racing: 5, doors: 5, pong: 2, flappy: 2, painter: 2 }
+    modeWins: { vanish: 5, racing: 5, doors: 5, pong: 5, flappy: 5, painter: 5, fire: 5, golf: 5, colorfloor: 2, pushy: 1, bomb: 1 },
+    modePlays: { bomb: 12, pushy: 12, colorfloor: 12, flappy: 12, hidebomb: 12, doors: 12 }
   }));
   assert.ok(pro.unlocked > rookie.unlocked);
   assert.equal(pro.unlocked, pro.total, "the sample pro stats should unlock everything");

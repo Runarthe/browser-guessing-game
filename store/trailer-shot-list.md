@@ -65,7 +65,7 @@ tested best, and pick the moment in each that reads instantly at small size:
 | **Vanishing Grid** | A player dropping through a floor, camera following down |
 | **Polygon Pong** | A fast multi-ball rally, ideally a near-miss save |
 | **Place It** | Several pins landing on the world map at once, then the reveal |
-| **Balloon** | The pump, the pump, the *pop* — end on the burst |
+| **Balloon Popper** | The pump, the pump, the *pop* — end on the burst |
 | **Pocket Racers** | Two cars colliding into a corner |
 | **Fire Escape** | The flame wall closing in behind the runners |
 | **Curling** | A stone knocking a rival clean off the ice |

@@ -81,8 +81,8 @@ function roomView(room) {
 // Static metadata the client needs to render the settings + character UI.
 const GAME_META = {
   modes: GAME_MODES,
-  readyModes: ["curling", "golf", "platformer", "pushy", "hidebomb", "colorfloor", "vanish", "fire", "racing", "flappy", "runner", "painter", "pong", "doors", "drawing", "trivia", "timeline", "map", "bomb"],
-  wipModes: ["bombpass", "redlight"],
+  readyModes: ["curling", "golf", "platformer", "pushy", "hidebomb", "colorfloor", "vanish", "fire", "racing", "flappy", "runner", "painter", "pong", "drawing", "trivia", "timeline", "map", "bomb"],
+  wipModes: ["bombpass", "redlight", "doors"],
   rounds: ALLOWED_ROUNDS,
   seconds: ALLOWED_SECONDS,
   targets: ALLOWED_TARGETS,

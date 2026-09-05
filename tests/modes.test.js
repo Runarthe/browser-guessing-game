@@ -114,6 +114,10 @@ test("curling: stones collide on ice and can slide off an open edge", () => {
   gm.submitGuess(room,second,{direction:0,power:.55});
   const after=room.curlingStones.find((s)=>s.stoneId===`${first}:1`);
   assert.ok(Math.hypot(after.x-before.x,after.y-before.y)>1,"the second stone should transfer momentum to the first");
+  const settled=room.curlingStones.filter((s)=>!s.off);
+  for(let i=0;i<settled.length;i++)for(let j=i+1;j<settled.length;j++){
+    assert.ok(Math.hypot(settled[i].x-settled[j].x,settled[i].y-settled[j].y)>=49.9,"settled stones must not overlap");
+  }
   while(room.state===GAME_STATES.QUESTION){
     room.curlingPlaybackUntil=0;
     const id=room.turnOrder[room.turnIndex];gm.submitGuess(room,id,{direction:id===third?1:0,power:id===third?1:.5});
@@ -312,6 +316,9 @@ test("ricochet golf starts with a random closest-positioned opener and simulates
   const active=room.turnOrder[0],before={...room.golf.balls[active]};
   assert.equal(gm.submitGuess(room,active,{direction:.2,power:.55}).ok,true);gm.disarmTimer(room);
   assert.ok(room.golf.trajectory.length>2);assert.notDeepEqual(room.golf.balls[active],before);
+  for(const ball of Object.values(room.golf.balls)){
+    assert.ok(ball.holed||gm.golfInside(ball.x,ball.y,15,room.golf.courseId),"ball collision resolution must keep every ball on the fairway");
+  }
   assert.notEqual(room.turnOrder[0],active,"every other player gets an opening shot before furthest-first begins");
 });
 
@@ -671,6 +678,18 @@ test("wild run: players get identical private lanes, jump hazards, and rank by d
   assert.equal(room.arena.positions.s2.y,326);
   gm.arenaJump(room,"s1");
   assert.equal(room.arena.positions.s1.vy,-420);
+  // A floating platform is real ground: it must support the runner and allow
+  // the next jump instead of treating the landing as an airborne tick.
+  const platform={x:135+room.arena.positions.s1.distance,y:205,w:160};
+  room.arena.runnerPlatforms=[platform];
+  Object.assign(room.arena.positions.s1,{y:200,vy:120,grounded:false});
+  room.arena.physicsAt=Date.now()-55;
+  gm.tickArena(room);
+  assert.equal(room.arena.positions.s1.y,205,"runner lands on the platform top");
+  assert.equal(room.arena.positions.s1.grounded,true,"platform landing is grounded");
+  room.arena.positions.s1.jumpCooldownUntil=0;
+  gm.arenaJump(room,"s1");
+  assert.equal(room.arena.positions.s1.vy,-420,"runner can jump again from a platform");
   const elapsed=Date.now()-room.arena.startedAt;
   const speed=Math.min(.24,.105+elapsed/360000),progress=elapsed*speed;
   room.arena.obstacles=[{x:135+progress,w:30,h:55,type:"stump"}];
@@ -884,76 +903,30 @@ test("timeline placement correctness handles before/between/after and ties", () 
   assert.equal(gm.isPlacementCorrect(cards, 1, 1900), true);   // "at exactly" a boundary
 });
 
-test("timeline team-vote (3+ players): majority places the card and correct votes score", () => {
-  const { rm, gm, last, events } = harness();
-  const { room } = rm.createRoom("s1", "Runar");
-  rm.joinRoom("s2", room.code, "Anna");
-  rm.joinRoom("s3", room.code, "Erik");
-  room.settings.mode = "timeline";
-  room.settings.target = 3;
-
-  gm.startGame(room, "s1");
-  assert.equal(room.hitster.teamVote, true, "3 players should trigger team voting");
-  assert.equal(room.sharedTimeline.length, 1, "seed card on the shared timeline");
-  const t0 = last("turn:started").payload;
-  assert.equal(t0.teamVote, true);
-  assert.equal(t0.card.year, undefined, "year leaked in team payload");
-
-  function correctSlotFor(card) {
-    const sorted = room.sharedTimeline.slice().sort((a, b) => a.year - b.year);
-    let slot = sorted.findIndex((c) => card.year <= c.year);
-    return slot === -1 ? sorted.length : slot;
-  }
-
-  let guard = 0;
-  while (room.state === GAME_STATES.QUESTION && guard++ < 200) {
-    const slot = correctSlotFor(room.currentCard);
-    for (const id of ["s1", "s2", "s3"]) {
-      gm.timelineVote(room, id, slot);
-      gm.timelineLock(room, id, true);
-    }
-    // Resolving emits a result; ensure it happened.
-    assert.ok(last("timeline:result"), "a vote should resolve to a result");
-  }
-  assert.equal(room.state, GAME_STATES.FINISHED);
-  const fin = last("game:finished").payload;
-  assert.ok(fin.standings[0].score >= 3);
-  // Since everyone voted correctly, the shared timeline grew beyond the seed.
-  assert.ok(room.sharedTimeline.length > 1);
-});
-
-test("timeline team-vote: changing a pick unlocks it, and a wrong majority discards", () => {
+test("timeline: team draw creates coloured shared timelines and last picks count", () => {
   const { rm, gm, last } = harness();
   const { room } = rm.createRoom("s1", "Runar");
   rm.joinRoom("s2", room.code, "Anna");
   rm.joinRoom("s3", room.code, "Erik");
   room.settings.mode = "timeline";
-  room.settings.target = 20; // high so the game doesn't end mid-test
-
+  room.settings.target = 20; gm.random=()=>.1;
   gm.startGame(room, "s1");
-  const seedLen = room.sharedTimeline.length;
-  const card = room.currentCard;
-  const sorted = room.sharedTimeline.slice().sort((a, b) => a.year - b.year);
-  // Deliberately wrong slot for everyone (opposite end).
-  const correct = sorted.findIndex((c) => card.year <= c.year);
-  const wrong = correct === 0 ? sorted.length : 0;
-
-  gm.timelineVote(room, "s1", wrong);
-  gm.timelineLock(room, "s1", true);
-  // Re-voting unlocks.
-  gm.timelineVote(room, "s1", wrong);
-  assert.equal(room.votes["s1"].locked, false);
-  gm.timelineLock(room, "s1", true);
-  gm.timelineVote(room, "s2", wrong); gm.timelineLock(room, "s2", true);
-  gm.timelineVote(room, "s3", wrong); gm.timelineLock(room, "s3", true);
-
-  const res = last("timeline:result").payload;
-  assert.equal(res.majorityCorrect, false);
-  // Wrong majority -> card discarded, shared timeline unchanged.
-  assert.equal(room.sharedTimeline.length, seedLen);
+  assert.equal(room.timeline.teamMode, true, "the draw can select teams");
+  assert.equal(room.timeline.sides.length, 2, "two coloured teams are created");
+  const t0 = last("turn:started").payload;
+  assert.equal(t0.teamMode, true);
+  assert.equal(t0.card.year, undefined, "year leaked in team payload");
+  const side=room.timeline.sides.find((s)=>s.memberIds.includes("s1"));
+  const correct=side.cards.findIndex((c)=>room.currentCard.year<=c.year);const slot=correct<0?side.cards.length:correct;
+  gm.timelinePlace(room,"s1",slot===0?Math.min(1,side.cards.length):0);
+  gm.timelinePlace(room,"s1",slot); // latest pick replaces the earlier one
+  assert.equal(room.timeline.picks.s1.slot,slot);
+  const before=side.cards.length;gm.resolveTimelineRound(room);
+  assert.ok(last("timeline:result").payload.perPlayer.some((p)=>p.playerId==="s1"&&p.correct));
+  assert.equal(side.cards.length,before+1,"one correct teammate grows the shared timeline once");
 });
 
-test("timeline (Hitster): first to the target score wins; card years stay hidden", () => {
+test("timeline: solo players place simultaneously and first to target wins", () => {
   const { rm, gm, last, events } = harness();
   const { room } = rm.createRoom("s1", "Runar");
   rm.joinRoom("s2", room.code, "Anna");
@@ -962,27 +935,26 @@ test("timeline (Hitster): first to the target score wins; card years stay hidden
 
   gm.startGame(room, "s1");
   assert.equal(room.state, GAME_STATES.QUESTION);
-  // Each player seeded with one card, zero points.
-  assert.equal(room.players["s1"].cards.length, 1);
+  // Each player receives an individually coloured timeline, zero points.
+  assert.equal(room.timeline.teamMode,false);
+  assert.equal(room.timeline.sides.length,2);
   assert.equal(room.players["s1"].score, 0);
 
   // The public turn payload must not leak the year.
   const t0 = last("turn:started").payload;
   assert.equal(t0.card.year, undefined, "card year leaked");
-  assert.ok(t0.timelines.length === 2);
+  assert.ok(t0.sides.length === 2);
 
-  // Play: the active player always places the card in its truly-correct slot.
+  // Every player keeps a pick; the timer resolution scores their last pick.
   let guard = 0;
   while (room.state === GAME_STATES.QUESTION && guard++ < 500) {
-    const activeId = room.turnOrder[room.turnIndex % room.turnOrder.length];
-    const player = room.players[activeId];
-    const sorted = player.cards.slice().sort((a, b) => a.year - b.year);
-    const year = room.currentCard.year;
-    // Find the correct slot for this year.
-    let slot = sorted.findIndex((c) => year <= c.year);
-    if (slot === -1) slot = sorted.length;
-    const res = gm.timelinePlace(room, activeId, slot);
-    assert.equal(res.ok, true);
+    for(const player of rm.connectedPlayers(room)){
+      const side=room.timeline.sides.find((s)=>s.memberIds.includes(player.id));
+      let slot=side.cards.slice().sort((a,b)=>a.year-b.year).findIndex((c)=>room.currentCard.year<=c.year);
+      if(slot<0)slot=side.cards.length;
+      assert.equal(gm.timelinePlace(room,player.id,slot).ok,true);
+    }
+    gm.resolveTimelineRound(room);
   }
 
   assert.equal(room.state, GAME_STATES.FINISHED);

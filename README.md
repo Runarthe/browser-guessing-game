@@ -1,5 +1,10 @@
 # Confetti
 
+> Current release status and priorities: [docs/ROADMAP.md](docs/ROADMAP.md).
+> Steam PC online play is required before launch (App ID 5229250), but is not yet
+> implemented. The game currently has 18 friend-test-ready modes and 3 WIP modes.
+> Older gameplay descriptions below are historical and are being reconciled.
+
 A browser-based multiplayer party game. Players join a private room with a short
 code, then compete over five rounds of numerical trivia. Each round, everyone
 submits one guess — the player **closest** to the correct answer scores the most
@@ -41,14 +46,14 @@ The host picks a mode in the lobby before starting:
   touch controls responsive.
 - **🎨 Drawing** — one player draws a secret word on the shared canvas while
   everyone else guesses; correct guesses reward both the guesser and artist.
-- **🐧 Pushy** — all players move together on one shared icy platform while
+- **🐧 Penguin Menace** — all players move together on one shared icy platform while
   increasingly dense left-to-right penguin crowds try to shove them into the
   water.
 - **🚦 Red Light, Green Light** — one player controls the real light and can
   throw harmless red-light feints while everyone else holds to run and must
   release before a genuine red light. A recharging battery prevents the
   controller from leaving red on indefinitely.
-- **💣 Hide and Go BOOM!** — the team gets ten seconds to choose one of four
+- **💣 Cannon Caper** — the team gets ten seconds to choose one of four
   cannons, then stays hidden while the rotating solo player lights three
   different fuses. The solo player is blindfolded during hiding, and every
   choice has a synchronized fuse-burning suspense animation before the reveal.
@@ -167,12 +172,12 @@ closest-wins/
 Run `npm test` — 76 tests across scoring, rooms, reconnect, settings, avatars, the
 arcade playlist and all ten game modes.
 
-### Roadmap
+### Historical roadmap (superseded by docs/ROADMAP.md)
 
 Built: Arcade playlist ✅, Map "Place it" ✅, Leave button + confirm dialogs ✅,
 Timeline team-voting ✅, character reaction sounds ✅, Build & Race platformer ✅,
-Drawing ✅, Pushy platform survival ✅, Red Light Green Light ✅,
-Hide and Go BOOM! ✅.
+Drawing ✅, Penguin Menace ✅, Red Light Green Light ✅,
+Cannon Caper ✅.
 
 Systems & minigame ideas queued:
 
